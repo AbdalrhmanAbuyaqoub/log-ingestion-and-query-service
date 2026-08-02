@@ -17,7 +17,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run test/unit",
     "test:unit": "vitest run test/unit",
-    "test:integration": "vitest run --passWithNoTests test/integration"
+    "test:integration": "vitest run --passWithNoTests test/integration",
+    "migrate": "node-pg-migrate"
   },
   "keywords": [
     "logs",

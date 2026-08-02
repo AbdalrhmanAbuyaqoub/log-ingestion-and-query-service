@@ -6,3 +6,4 @@ coverage/
 .env.*
 !.env.example
 AGENTS.md
+PLAN.md

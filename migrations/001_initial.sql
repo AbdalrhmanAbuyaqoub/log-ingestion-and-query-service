@@ -29,8 +29,21 @@ CREATE TABLE logs (
 -- meaningful volume.
 CREATE TABLE logs_default PARTITION OF logs DEFAULT;
 
+
+-- Purpose: the common query shape GET /logs?service=foo&before=… — filter by service, paginate newest-first.
+-- Why three columns: with service first the planner can seek to the right service constant,
+-- then walk ("timestamp" DESC, id DESC) in already-sorted order → no sort step, straight index-only scan for the page.
+-- he (service, before) keyset is (service, timestamp, id) < ($1, $2, $3), which maps exactly onto the index ordering.
 CREATE INDEX logs_service_ts_id_idx ON logs (service, "timestamp" DESC, id DESC);
 
+-- Purpose: the attr.key=value filter on the /logs query API.
+-- Why jsonb_path_ops (not the default jsonb_ops): smaller index and faster lookups, 
+-- at the cost of only supporting @> (and jsonb path existence).
+-- Since the API only needs containment, that's the right tradeoff.
 CREATE INDEX logs_attributes_gin_idx ON logs USING gin (attributes jsonb_path_ops);
 
+-- Purpose: the q=… substring search on message (e.g. GET /logs?q=timeout).
+-- Why trigrams: LIKE '%timeout%' / ILIKE '%timeout%' cannot use a normal B-tree.
+-- pg_trgm breaks the text into 3-character grams and GIN-indexes them,
+-- so substring matches become containment lookups instead of full scans.
 CREATE INDEX logs_message_trgm_idx ON logs USING gin (message gin_trgm_ops);

@@ -30,8 +30,7 @@
   "dependencies": {
     "fastify": "^5.11.0",
     "node-pg-migrate": "^9.0.0",
-    "pg": "^8.22.0",
-    "zod": "^4.4.3"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

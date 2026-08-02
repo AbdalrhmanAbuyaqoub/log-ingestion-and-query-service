@@ -17,7 +17,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
-      - run: npm run typecheck
+      - run: npm run typecheck # to-do: check
       - run: npm run test:unit
       - run: npm run test:integration
       - run: npm run build

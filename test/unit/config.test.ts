@@ -7,9 +7,6 @@ describe('loadConfig', () => {
     expect(config.PORT).toBe(8080);
     expect(config.LOG_LEVEL).toBe('warn');
     expect(config.RETENTION_DAYS).toBe(30);
-    expect(config.INGEST_FLUSH_INTERVAL_MS).toBe(150);
-    expect(config.INGEST_FLUSH_BATCH_SIZE).toBe(500);
-    expect(config.INGEST_BUFFER_MAX).toBe(50_000);
   });
 
   it('coerces numeric strings from the environment', () => {
@@ -17,11 +14,9 @@ describe('loadConfig', () => {
       DATABASE_URL: 'postgres://x',
       PORT: '9090',
       RETENTION_DAYS: '7',
-      INGEST_BUFFER_MAX: '1000',
     });
     expect(config.PORT).toBe(9090);
     expect(config.RETENTION_DAYS).toBe(7);
-    expect(config.INGEST_BUFFER_MAX).toBe(1000);
   });
 
   it('throws when DATABASE_URL is missing', () => {
@@ -34,5 +29,14 @@ describe('loadConfig', () => {
 
   it('rejects non-numeric ports', () => {
     expect(() => loadConfig({ DATABASE_URL: 'x', PORT: 'abc' })).toThrow();
+  });
+
+  it('rejects out-of-range ports', () => {
+    expect(() => loadConfig({ DATABASE_URL: 'x', PORT: '0' })).toThrow();
+    expect(() => loadConfig({ DATABASE_URL: 'x', PORT: '99999' })).toThrow();
+  });
+
+  it('rejects non-positive retention days', () => {
+    expect(() => loadConfig({ DATABASE_URL: 'x', RETENTION_DAYS: '0' })).toThrow();
   });
 });

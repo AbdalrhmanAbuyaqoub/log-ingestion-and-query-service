@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:17-alpine # to-do: use latest version
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: logs
@@ -21,7 +21,7 @@ services:
       - -c
       - max_wal_size=1GB
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U logs -d logs']
       interval: 2s

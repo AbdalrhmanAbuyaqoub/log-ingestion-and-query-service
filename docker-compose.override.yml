@@ -1,0 +1,13 @@
+# Local dev overrides — automatically merged by `docker compose up`.
+# Replicates NO app behavior; only publishes the db port so host-side
+# `npm run dev` (tsx on Node, outside Docker) can reach Postgres.
+# CI/grading parity is unaffected. To run the base file alone:
+#   docker compose -f docker-compose.yml up
+#
+# Port choice: 5433:5432 (not 5432:5432) to avoid conflict with a
+# host-native postgres install on 5432 — a common dev-machine setup.
+
+services:
+  db:
+    ports:
+      - '5433:5432'

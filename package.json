@@ -1,0 +1,48 @@
+{
+  "name": "log-ingestion-service",
+  "version": "1.0.0",
+  "description": "High-throughput structured log ingestion and query service (PostgreSQL-backed)",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run test/unit",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run --passWithNoTests test/integration"
+  },
+  "keywords": [
+    "logs",
+    "ingestion",
+    "observability",
+    "postgresql"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "fastify": "^5.11.0",
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@types/pg": "^8.20.3",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
+    "testcontainers": "^12.0.4",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
+  }
+}

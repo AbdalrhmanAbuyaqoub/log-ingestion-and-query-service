@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { loadConfig } from './config.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
-import { buildServer } from './http/server.js';
+import { buildApp } from './app.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -10,18 +10,19 @@ async function main(): Promise<void> {
 
   await runMigrations(config);
 
-  const app = buildServer({ pool, config });
+  const app = buildApp({ pool, config });
+  const server = app.listen(config.PORT, '0.0.0.0', () => {
+    console.log(`listening on :${config.PORT}`);
+  });
 
   const shutdown = async (signal: string): Promise<void> => {
-    app.log.info({ signal }, 'shutting down');
-    await app.close();
+    console.log(`${signal} received, shutting down`);
+    server.close();
     await pool.end();
     process.exit(0);
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
-
-  await app.listen({ port: config.PORT, host: '0.0.0.0' });
 }
 
 main().catch((err: unknown) => {

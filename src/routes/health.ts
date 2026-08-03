@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import { Router } from 'express';
 import type pg from 'pg';
 
 /**
@@ -6,13 +6,15 @@ import type pg from 'pg';
  * after migrations have been applied, so a 200 implies: DB reachable,
  * schema migrated, service ready to accept traffic.
  */
-export function registerHealthRoutes(app: FastifyInstance, pool: pg.Pool): void {
-  app.get('/health', async (_request, reply) => {
+export function createHealthRouter(pool: pg.Pool): Router {
+  const router = Router();
+  router.get('/health', async (_req, res) => {
     try {
       await pool.query('SELECT 1');
-      return reply.code(200).send({ status: 'ok' });
+      return res.status(200).json({ status: 'ok' });
     } catch {
-      return reply.code(503).send({ status: 'unavailable' });
+      return res.status(503).json({ status: 'unavailable' });
     }
   });
+  return router;
 }

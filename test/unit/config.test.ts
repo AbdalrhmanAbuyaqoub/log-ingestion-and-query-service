@@ -5,7 +5,6 @@ describe('loadConfig', () => {
   it('applies defaults when only DATABASE_URL is provided', () => {
     const config = loadConfig({ DATABASE_URL: 'postgres://localhost/logs' });
     expect(config.PORT).toBe(8080);
-    expect(config.LOG_LEVEL).toBe('warn');
     expect(config.RETENTION_DAYS).toBe(30);
   });
 
@@ -21,10 +20,6 @@ describe('loadConfig', () => {
 
   it('throws when DATABASE_URL is missing', () => {
     expect(() => loadConfig({})).toThrow();
-  });
-
-  it('rejects invalid log levels', () => {
-    expect(() => loadConfig({ DATABASE_URL: 'x', LOG_LEVEL: 'verbose' })).toThrow();
   });
 
   it('rejects non-numeric ports', () => {

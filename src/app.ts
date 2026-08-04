@@ -2,6 +2,7 @@ import express from 'express';
 import type pg from 'pg';
 import type { Config } from './config.js';
 import { createHealthRouter } from './routes/health.js';
+import { createLogsRouter } from './routes/logs.js';
 import { errorMiddleware } from './middleware/error-handler.js';
 import { notFoundMiddleware } from './middleware/not-found.js';
 import { middlewareLogResponses } from './middleware/middlwareLogResponses.js';
@@ -25,6 +26,7 @@ export function buildApp(deps: ServerDeps): express.Express {
   app.use(express.json({ limit: '10mb' }));
 
   app.use(createHealthRouter(deps.pool));
+  app.use(createLogsRouter(deps.pool));
 
   app.use(notFoundMiddleware);
   app.use(errorMiddleware);

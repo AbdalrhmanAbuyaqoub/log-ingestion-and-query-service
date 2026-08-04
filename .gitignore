@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+load/out/
 *.log
 .env
 .env.*
@@ -8,3 +9,4 @@ coverage/
 AGENTS.md
 PLAN.md
 PROJECT_REQIREMENTS.md
+load/

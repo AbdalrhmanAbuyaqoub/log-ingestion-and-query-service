@@ -15,7 +15,3 @@ export type ValidLogEntry = {
 export type Rejection = { index: number; reason: string };
 
 export type BatchResult = { valid: ValidLogEntry[]; rejected: Rejection[] };
-
-export type Queryable = {
-  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
-};

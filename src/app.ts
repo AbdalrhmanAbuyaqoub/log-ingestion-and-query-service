@@ -1,23 +1,17 @@
 import express from 'express';
-import type pg from 'pg';
-import type { Config } from './config.js';
-import { createHealthRouter } from './routes/health.js';
-import { createLogsRouter } from './routes/logs.js';
+import { mountRoutes } from './routes/index.js';
 import { errorMiddleware } from './middleware/error-handler.js';
 import { notFoundMiddleware } from './middleware/not-found.js';
-import { middlewareLogResponses } from './middleware/middlwareLogResponses.js';
-
-export type ServerDeps = {
-  pool: pg.Pool;
-  config: Config;
-};
+import { middlewareLogResponses } from './middleware/middlewareLogResponses.js';
 
 /**
- * Builds the Express app without listening. Routers are mounted under their
- * path prefixes, the 404 catch-all is mounted after routes, and the error
- * middleware is mounted last (Express error middleware arity-4 + ordering rule).
+ * Builds the Express app without listening. Routers are mounted by
+ * `mountRoutes`, the 404 catch-all is mounted after routes, and the error
+ * middleware is mounted last (Express error middleware arity-4 + ordering
+ * rule). Database access is handled by the singleton `src/db/index.ts`
+ * module — no pool is threaded in.
  */
-export function buildApp(deps: ServerDeps): express.Express {
+export function buildApp(): express.Express {
   const app = express();
 
   app.use(middlewareLogResponses);
@@ -25,8 +19,7 @@ export function buildApp(deps: ServerDeps): express.Express {
   // Batches of up to ~1000 entries must fit; Express's default is 1MB.
   app.use(express.json({ limit: '10mb' }));
 
-  app.use(createHealthRouter(deps.pool));
-  app.use(createLogsRouter(deps.pool));
+  mountRoutes(app);
 
   app.use(notFoundMiddleware);
   app.use(errorMiddleware);

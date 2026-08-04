@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+vi.mock('../../../src/db/index.js', () => ({
+  query: vi.fn(),
+  getClient: vi.fn(),
+  close: vi.fn(),
+}));
+
 import { insertLogs } from '../../../src/ingestion/insert.js';
-import type { Queryable, ValidLogEntry } from '../../../src/ingestion/types.js';
+import { query } from '../../../src/db/index.js';
+import type { ValidLogEntry } from '../../../src/ingestion/types.js';
 
 function entry(overrides: Partial<ValidLogEntry> = {}): ValidLogEntry {
   return {
@@ -13,29 +21,25 @@ function entry(overrides: Partial<ValidLogEntry> = {}): ValidLogEntry {
   };
 }
 
-type MockedQuery = Queryable & { query: ReturnType<typeof vi.fn> };
-
-function mockDb(): MockedQuery {
-  const query = vi.fn(async () => ({ rows: [], rowCount: 2 }));
-  return { query } as MockedQuery;
-}
-
 describe('insertLogs', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
   it('returns 0 and issues no query when entries is empty', async () => {
-    const db = mockDb();
-    const n = await insertLogs(db, []);
+    const n = await insertLogs([]);
     expect(n).toBe(0);
-    expect(db.query).not.toHaveBeenCalled();
+    expect(vi.mocked(query)).not.toHaveBeenCalled();
   });
 
   it('issues one INSERT via unnest with five arrays', async () => {
-    const db = mockDb();
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 2 } as never);
     const entries = [entry(), entry({ level: 'info' })];
 
-    await insertLogs(db, entries);
+    await insertLogs(entries);
 
-    expect(db.query).toHaveBeenCalledTimes(1);
-    const [text, values] = db.query.mock.calls[0]!;
+    expect(vi.mocked(query)).toHaveBeenCalledTimes(1);
+    const [text, values] = vi.mocked(query).mock.calls[0]!;
     expect(text).toMatch(/INSERT INTO logs/);
     expect(text).toMatch(/unnest/);
     expect(text).toMatch(/\$1::timestamptz\[\]/);
@@ -49,24 +53,19 @@ describe('insertLogs', () => {
   });
 
   it('returns rowCount when the driver reports it', async () => {
-    const db: Queryable = {
-      query: vi.fn(async () => ({ rows: [], rowCount: 7 })),
-    };
-    const n = await insertLogs(
-      db,
-      Array.from({ length: 7 }, () => entry()),
-    );
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 7 } as never);
+    const n = await insertLogs(Array.from({ length: 7 }, () => entry()));
     expect(n).toBe(7);
   });
 
   it('falls back to entries.length when rowCount is undefined', async () => {
-    const db: Queryable = { query: vi.fn(async () => ({ rows: [] })) };
-    const n = await insertLogs(db, [entry(), entry(), entry()]);
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    const n = await insertLogs([entry(), entry(), entry()]);
     expect(n).toBe(3);
   });
 
   it('propagates driver errors', async () => {
-    const db: Queryable = { query: vi.fn(async () => Promise.reject(new Error('boom'))) };
-    await expect(insertLogs(db, [entry()])).rejects.toThrow('boom');
+    vi.mocked(query).mockRejectedValue(new Error('boom'));
+    await expect(insertLogs([entry()])).rejects.toThrow('boom');
   });
 });

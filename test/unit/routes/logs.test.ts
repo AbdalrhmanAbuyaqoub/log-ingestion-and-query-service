@@ -1,15 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+vi.mock('../../../src/db/index.js', () => ({
+  query: vi.fn(),
+  getClient: vi.fn(),
+  close: vi.fn(),
+}));
+
 import request from 'supertest';
-import type pg from 'pg';
+import { query } from '../../../src/db/index.js';
 import { buildApp } from '../../../src/app.js';
-import { loadConfig } from '../../../src/config.js';
-
-const config = loadConfig({ DATABASE_URL: 'postgres://unused' });
-
-function mockPool(impl?: () => Promise<unknown>): pg.Pool {
-  const query = vi.fn(impl ?? (async () => ({ rows: [], rowCount: 0 })));
-  return { query } as unknown as pg.Pool;
-}
 
 function entry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -23,9 +22,13 @@ function entry(overrides: Record<string, unknown> = {}): Record<string, unknown>
 }
 
 describe('POST /logs', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
   it('returns 200 {accepted, rejected} for a fully valid batch', async () => {
-    const pool = mockPool(async () => ({ rows: [], rowCount: 2 }));
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 2 } as never);
+    const app = buildApp();
 
     const res = await request(app)
       .post('/logs')
@@ -33,12 +36,12 @@ describe('POST /logs', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ accepted: 2, rejected: [] });
-    expect((pool.query as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    expect(vi.mocked(query).mock.calls).toHaveLength(1);
   });
 
   it('returns 200 with rejected[] for a partially valid batch', async () => {
-    const pool = mockPool(async () => ({ rows: [], rowCount: 1 }));
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 1 } as never);
+    const app = buildApp();
 
     const res = await request(app)
       .post('/logs')
@@ -54,8 +57,7 @@ describe('POST /logs', () => {
   });
 
   it('returns 400 when all entries are rejected', async () => {
-    const pool = mockPool();
-    const app = buildApp({ pool, config });
+    const app = buildApp();
 
     const res = await request(app)
       .post('/logs')
@@ -65,12 +67,11 @@ describe('POST /logs', () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'all entries rejected' });
-    expect((pool.query as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect(vi.mocked(query).mock.calls).toHaveLength(0);
   });
 
   it('returns 400 on {logs: []}', async () => {
-    const pool = mockPool();
-    const app = buildApp({ pool, config });
+    const app = buildApp();
 
     const res = await request(app).post('/logs').send({ logs: [] });
 
@@ -79,8 +80,7 @@ describe('POST /logs', () => {
   });
 
   it('returns 400 when logs is not an array', async () => {
-    const pool = mockPool();
-    const app = buildApp({ pool, config });
+    const app = buildApp();
 
     const res = await request(app).post('/logs').send({ logs: 'foo' });
 
@@ -89,8 +89,7 @@ describe('POST /logs', () => {
   });
 
   it('returns 400 on malformed JSON body', async () => {
-    const pool = mockPool();
-    const app = buildApp({ pool, config });
+    const app = buildApp();
 
     const res = await request(app).post('/logs').type('json').send('{');
 
@@ -99,8 +98,8 @@ describe('POST /logs', () => {
   });
 
   it('returns 500 when the database query fails', async () => {
-    const pool = mockPool(async () => Promise.reject(new Error('connection refused')));
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockRejectedValue(new Error('connection refused'));
+    const app = buildApp();
 
     const res = await request(app)
       .post('/logs')

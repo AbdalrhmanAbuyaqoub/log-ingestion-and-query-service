@@ -1,15 +1,23 @@
-import { describe, expect, it } from 'vitest';
-import request from 'supertest';
-import type pg from 'pg';
-import { buildApp } from '../../src/app.js';
-import { loadConfig } from '../../src/config.js';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const config = loadConfig({ DATABASE_URL: 'postgres://unused' });
+vi.mock('../../src/db/index.js', () => ({
+  query: vi.fn(),
+  getClient: vi.fn(),
+  close: vi.fn(),
+}));
+
+import request from 'supertest';
+import { query } from '../../src/db/index.js';
+import { buildApp } from '../../src/app.js';
 
 describe('GET /health', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
   it('returns 200 when the database answers', async () => {
-    const pool = { query: async () => ({ rows: [] }) } as unknown as pg.Pool;
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as never);
+    const app = buildApp();
 
     const res = await request(app).get('/health');
 
@@ -18,12 +26,8 @@ describe('GET /health', () => {
   });
 
   it('returns 503 when the database is unreachable', async () => {
-    const pool = {
-      query: async () => {
-        throw new Error('connection refused');
-      },
-    } as unknown as pg.Pool;
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockRejectedValue(new Error('connection refused'));
+    const app = buildApp();
 
     const res = await request(app).get('/health');
 
@@ -34,8 +38,8 @@ describe('GET /health', () => {
 
 describe('malformed JSON body', () => {
   it('returns 400 with err.message on invalid JSON', async () => {
-    const pool = { query: async () => ({ rows: [] }) } as unknown as pg.Pool;
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as never);
+    const app = buildApp();
 
     const res = await request(app).post('/health').type('json').send('{');
 
@@ -46,8 +50,8 @@ describe('malformed JSON body', () => {
 
 describe('unknown route', () => {
   it('returns 404 with { error: "not found" }', async () => {
-    const pool = { query: async () => ({ rows: [] }) } as unknown as pg.Pool;
-    const app = buildApp({ pool, config });
+    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as never);
+    const app = buildApp();
 
     const res = await request(app).get('/unknown');
 

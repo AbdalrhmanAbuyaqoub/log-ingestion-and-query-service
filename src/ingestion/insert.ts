@@ -1,4 +1,5 @@
-import type { Queryable, ValidLogEntry } from './types.js';
+import { query } from '../db/index.js';
+import type { ValidLogEntry } from './types.js';
 
 /**
  * Inserts a batch of validated log entries in a single statement via
@@ -6,7 +7,7 @@ import type { Queryable, ValidLogEntry } from './types.js';
  * Invalid entries should already have been filtered out by the validator;
  * this function receives only accepted entries.
  */
-export async function insertLogs(db: Queryable, entries: ValidLogEntry[]): Promise<number> {
+export async function insertLogs(entries: ValidLogEntry[]): Promise<number> {
   if (entries.length === 0) return 0;
 
   const timestamps = entries.map((e) => e.timestamp);
@@ -27,6 +28,6 @@ export async function insertLogs(db: Queryable, entries: ValidLogEntry[]): Promi
     ) AS u(t, l, s, m, a)
   `;
 
-  const result = await db.query(text, [timestamps, levels, services, messages, attrs]);
+  const result = await query(text, [timestamps, levels, services, messages, attrs]);
   return result.rowCount ?? entries.length;
 }

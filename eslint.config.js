@@ -18,5 +18,17 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': 'error',
     },
   },
+  {
+    // k6 load-test scripts: declare k6's injected globals so eslint doesn't
+    // flag them as undefined. These are read-only runtime values provided by k6.
+    files: ['load/**/*.js'],
+    languageOptions: {
+      globals: {
+        __ENV: 'readonly',
+        __VU: 'readonly',
+        __ITER: 'readonly',
+      },
+    },
+  },
   prettier,
 );

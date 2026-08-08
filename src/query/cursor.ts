@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { ValidationError } from '../ingestion/errors.js';
+import { parseIsoTimestamp } from '../timestamp.js';
 
 export type CursorPayload = { t: string; id: string };
 
-const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
 const ID_RE = /^\d+$/;
 
 export function encodeCursor(t: Date, id: string): string {
@@ -35,7 +35,7 @@ export function decodeCursor(raw: string): CursorPayload {
   if (typeof o.t !== 'string' || typeof o.id !== 'string') {
     throw new ValidationError('malformed cursor');
   }
-  if (!ISO_RE.test(o.t)) throw new ValidationError('malformed cursor');
+  if (!parseIsoTimestamp(o.t)) throw new ValidationError('malformed cursor');
   if (!ID_RE.test(o.id)) throw new ValidationError('malformed cursor');
 
   return { t: o.t, id: o.id };

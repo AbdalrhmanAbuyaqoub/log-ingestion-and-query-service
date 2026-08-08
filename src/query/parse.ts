@@ -2,6 +2,7 @@ import type { AttrFilter, LogQuery } from './types.js';
 import { ValidationError } from '../ingestion/errors.js';
 import { LOG_LEVELS, type LogLevel } from '../ingestion/types.js';
 import { decodeCursor } from './cursor.js';
+import { parseIsoTimestamp } from '../timestamp.js';
 import type { ParsedQs } from 'qs';
 
 export type RawLogQuery = Record<string, string | string[] | undefined>;
@@ -10,8 +11,8 @@ export function parseLogsQuery(raw: ParsedQs): LogQuery {
   const query = normalizeQuery(raw);
   const since = parseTimestamp(query.since, 'since');
   const until = parseTimestamp(query.until, 'until');
-  if (since && until && until <= since) {
-    throw new ValidationError('until must be after since');
+  if (since && until && until < since) {
+    throw new ValidationError('until must not be earlier than since');
   }
   return {
     service: query.service as string | undefined,
@@ -67,18 +68,15 @@ function parseLevel(rawLevel: string | string[] | undefined): LogLevel | undefin
   return rawLevel as LogLevel;
 }
 
-const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
-
 function parseTimestamp(
   rawTs: string | string[] | undefined,
   field: 'since' | 'until',
 ): Date | undefined {
   if (rawTs === undefined) return undefined;
   if (Array.isArray(rawTs)) throw new ValidationError(`${field} must not be repeated`);
-  if (!ISO_RE.test(rawTs)) throw new ValidationError(`invalid ${field}`);
-  const ms = Date.parse(rawTs);
-  if (!Number.isFinite(ms)) throw new ValidationError(`invalid ${field}`);
-  return new Date(ms);
+  const parsed = parseIsoTimestamp(rawTs);
+  if (!parsed) throw new ValidationError(`invalid ${field}`);
+  return parsed;
 }
 
 function parseQ(rawQ: string | string[] | undefined): string | undefined {

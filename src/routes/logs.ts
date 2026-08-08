@@ -5,12 +5,6 @@ import { insertLogs } from '../ingestion/insert.js';
 import { parseLogsQuery } from '../query/parse.js';
 import { queryLogs } from '../query/index.js';
 
-/**
- * Wires the /logs routes. Reserved for both POST /logs (ingestion) and
- * GET /logs (query); only the ingestion route is mounted in this round.
- * Express 5 auto-forwards rejected promises from async handlers to the
- * error middleware.
- */
 export function createLogsRouter(): Router {
   const router = Router();
 

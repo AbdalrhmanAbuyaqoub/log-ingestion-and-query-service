@@ -45,11 +45,12 @@ describe('insertLogs', () => {
     expect(text).toMatch(/\$1::timestamptz\[\]/);
     expect(text).toMatch(/\$5::jsonb\[\]/);
     expect(values).toHaveLength(5);
-    expect(values[0]).toEqual([entries[0]!.timestamp, entries[1]!.timestamp]);
-    expect(values[1]).toEqual(['error', 'info']);
-    expect(values[2]).toEqual(['checkout', 'checkout']);
-    expect(values[3]).toEqual(['payment declined', 'payment declined']);
-    expect(values[4]).toEqual(['{"retries":3}', '{"retries":3}']);
+    const params = values!;
+    expect(params[0]).toEqual([entries[0]!.timestamp, entries[1]!.timestamp]);
+    expect(params[1]).toEqual(['error', 'info']);
+    expect(params[2]).toEqual(['checkout', 'checkout']);
+    expect(params[3]).toEqual(['payment declined', 'payment declined']);
+    expect(params[4]).toEqual(['{"retries":3}', '{"retries":3}']);
   });
 
   it('returns rowCount when the driver reports it', async () => {

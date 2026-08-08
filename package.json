@@ -28,6 +28,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "date-fns": "^4.4.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-pg-migrate": "^9.0.0",
@@ -39,6 +40,7 @@
     "@types/node": "^26.1.2",
     "@types/pg": "^8.20.3",
     "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",

@@ -6,6 +6,7 @@ import {
   type ValidLogEntry,
 } from './types.js';
 import { ValidationError } from './errors.js';
+import { parseIsoTimestamp } from '../timestamp.js';
 
 const MAX_FUTURE_MS = 5 * 60_000;
 
@@ -26,10 +27,11 @@ export function validateEntry(raw: unknown, now: number = Date.now()): ValidLogE
 
   const r = raw as Record<string, unknown>;
 
-  const tsRaw = r['timestamp']; // to-do: check iso validation
+  const tsRaw = r['timestamp'];
   if (typeof tsRaw !== 'string') return 'timestamp must be an ISO 8601 string';
-  const tsMs = Date.parse(tsRaw);
-  if (Number.isNaN(tsMs)) return 'timestamp must be a valid ISO 8601 timestamp';
+  const timestamp = parseIsoTimestamp(tsRaw);
+  if (!timestamp) return 'timestamp must be a valid ISO 8601 timestamp';
+  const tsMs = timestamp.getTime();
   if (tsMs > now + MAX_FUTURE_MS) return 'timestamp must not be more than 5 minutes in the future';
 
   const level = r['level'];
@@ -49,7 +51,7 @@ export function validateEntry(raw: unknown, now: number = Date.now()): ValidLogE
 
   if (!('attributes' in r)) {
     return {
-      timestamp: new Date(tsMs),
+      timestamp,
       level: level as LogLevel,
       service,
       message,
@@ -71,7 +73,7 @@ export function validateEntry(raw: unknown, now: number = Date.now()): ValidLogE
     attributes[key] = value;
   }
 
-  return { timestamp: new Date(tsMs), level: level as LogLevel, service, message, attributes };
+  return { timestamp, level: level as LogLevel, service, message, attributes };
 }
 
 /**

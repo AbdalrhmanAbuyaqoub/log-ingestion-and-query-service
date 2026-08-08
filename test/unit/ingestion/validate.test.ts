@@ -71,6 +71,26 @@ describe('validateEntry', () => {
     expect(validateEntry({ ...validEntry(), timestamp: 'not-a-date' }, NOW)).toMatch(/timestamp/);
   });
 
+  it('rejects non-contract timestamp formats and impossible calendar dates', () => {
+    for (const timestamp of [
+      '2026-08-03',
+      'Mon, 03 Aug 2026 09:59:00 GMT',
+      '2026-02-30T09:59:00Z',
+      '2026-13-01T09:59:00Z',
+      '2026-08-03T25:00:00Z',
+    ]) {
+      expect(validateEntry({ ...validEntry(), timestamp }, NOW)).toMatch(/timestamp/);
+    }
+  });
+
+  it('accepts a valid leap-day timestamp', () => {
+    const leapDay = '2024-02-29T09:59:00Z';
+    const result = validateEntry({ ...validEntry(), timestamp: leapDay }, NOW);
+
+    expect(result).not.toEqual(expect.any(String));
+    expect((result as { timestamp: Date }).timestamp).toEqual(new Date(leapDay));
+  });
+
   it('rejects timestamps more than 5 minutes in the future', () => {
     const future = new Date(NOW + 6 * 60_000).toISOString();
     expect(validateEntry({ ...validEntry(), timestamp: future }, NOW)).toMatch(/future/);

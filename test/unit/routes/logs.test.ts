@@ -21,6 +21,18 @@ function entry(overrides: Record<string, unknown> = {}): Record<string, unknown>
   };
 }
 
+function dbRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '1',
+    timestamp: new Date('2026-08-08T12:00:00.000Z'),
+    level: 'info' as const,
+    service: 'checkout',
+    message: 'payment accepted',
+    attributes: { retries: 3, confirmed: true },
+    ...overrides,
+  };
+}
+
 describe('POST /logs', () => {
   beforeEach(() => {
     vi.mocked(query).mockReset();
@@ -104,6 +116,133 @@ describe('POST /logs', () => {
     const res = await request(app)
       .post('/logs')
       .send({ logs: [entry()] });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'internal server error' });
+  });
+});
+
+describe('GET /logs', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
+  it('returns the required empty response envelope', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+
+    const res = await request(buildApp()).get('/logs');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ logs: [], next_cursor: null });
+  });
+
+  it('returns a partial final page with string ids and typed attributes', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [dbRow()] } as never);
+
+    const res = await request(buildApp()).get('/logs?limit=2');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      logs: [
+        {
+          id: '1',
+          timestamp: '2026-08-08T12:00:00.000Z',
+          level: 'info',
+          service: 'checkout',
+          message: 'payment accepted',
+          attributes: { retries: 3, confirmed: true },
+        },
+      ],
+      next_cursor: null,
+    });
+    expect(typeof res.body.logs[0].id).toBe('string');
+  });
+
+  it('returns a cursor when the database supplies the lookahead row', async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [
+        dbRow({ id: '3', timestamp: new Date('2026-08-08T12:02:00.000Z') }),
+        dbRow({ id: '2', timestamp: new Date('2026-08-08T12:01:00.000Z') }),
+        dbRow({ id: '1', timestamp: new Date('2026-08-08T12:00:00.000Z') }),
+      ],
+    } as never);
+
+    const res = await request(buildApp()).get('/logs?limit=2');
+
+    expect(res.status).toBe(200);
+    expect(res.body.logs.map((log: { id: string }) => log.id)).toEqual(['3', '2']);
+    expect(res.body.next_cursor).toEqual(expect.any(String));
+  });
+
+  it('accepts freely combined filters and parameterizes their values', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+
+    const res = await request(buildApp()).get(
+      '/logs?service=checkout&level=error&since=2026-08-08T11%3A00%3A00Z&until=2026-08-08T13%3A00%3A00Z&attr.region=eu&attr.region=us&q=declined&limit=25',
+    );
+
+    expect(res.status).toBe(200);
+    const [text, params] = vi.mocked(query).mock.calls[0]!;
+    expect(text).toContain('service = $1');
+    expect(text).toContain('(attributes ->> $5 = $6 OR attributes ->> $7 = $8)');
+    expect(params).toEqual([
+      'checkout',
+      'error',
+      new Date('2026-08-08T11:00:00Z'),
+      new Date('2026-08-08T13:00:00Z'),
+      'region',
+      'eu',
+      'region',
+      'us',
+      'declined',
+      26,
+    ]);
+  });
+
+  it('preserves explicit empty filters and escapes message metacharacters', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+
+    const res = await request(buildApp()).get('/logs').query({ service: '', q: '%_' });
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(query).mock.calls[0]![1]).toEqual(['', '\\%\\_', 101]);
+  });
+
+  it('accepts equal time boundaries as an empty half-open range', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+
+    const res = await request(buildApp()).get('/logs').query({
+      since: '2026-08-08T12:00:00Z',
+      until: '2026-08-08T12:00:00Z',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ logs: [], next_cursor: null });
+  });
+
+  it('returns 400 without querying the database for invalid parameters', async () => {
+    const invalidQueries = [
+      ['/logs?level=critical', 'level'],
+      ['/logs?limit=0', 'limit'],
+      ['/logs?limit=abc', 'limit'],
+      ['/logs?since=not-a-date', 'since'],
+      ['/logs?since=2026-08-08T13%3A00%3A00Z&until=2026-08-08T12%3A00%3A00Z', 'until'],
+      ['/logs?cursor=not-a-cursor', 'cursor'],
+    ] as const;
+
+    for (const [path, error] of invalidQueries) {
+      const res = await request(buildApp()).get(path);
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: expect.stringMatching(error) });
+    }
+    expect(vi.mocked(query)).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when the database query fails', async () => {
+    vi.mocked(query).mockRejectedValue(new Error('connection refused'));
+
+    const res = await request(buildApp()).get('/logs');
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'internal server error' });

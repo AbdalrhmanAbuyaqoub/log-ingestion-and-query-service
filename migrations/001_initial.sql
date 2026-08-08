@@ -5,8 +5,8 @@
 --   by dropping whole partitions (instant, no bloat) instead of DELETEs.
 -- * The PRIMARY KEY must include the partition key; (timestamp, id) doubles as
 --   the keyset-pagination index (ORDER BY "timestamp" DESC, id DESC).
--- * attributes is JSONB indexed with jsonb_path_ops, which serves the
---   containment queries (@>) used for attr.<key>=value filters.
+-- * attributes remains typed JSONB. Attribute filters use JSONB text
+--   extraction (`attributes ->> key = value`) without an attribute index.
 -- * pg_trgm backs case-insensitive substring search on message (q=...).
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -35,15 +35,3 @@ CREATE TABLE logs_default PARTITION OF logs DEFAULT;
 -- then walk ("timestamp" DESC, id DESC) in already-sorted order → no sort step, straight index-only scan for the page.
 -- he (service, before) keyset is (service, timestamp, id) < ($1, $2, $3), which maps exactly onto the index ordering.
 CREATE INDEX logs_service_ts_id_idx ON logs (service, "timestamp" DESC, id DESC);
-
--- Purpose: the attr.key=value filter on the /logs query API.
--- Why jsonb_path_ops (not the default jsonb_ops): smaller index and faster lookups, 
--- at the cost of only supporting @> (and jsonb path existence).
--- Since the API only needs containment, that's the right tradeoff.
-CREATE INDEX logs_attributes_gin_idx ON logs USING gin (attributes jsonb_path_ops);
-
--- Purpose: the q=… substring search on message (e.g. GET /logs?q=timeout).
--- Why trigrams: LIKE '%timeout%' / ILIKE '%timeout%' cannot use a normal B-tree.
--- pg_trgm breaks the text into 3-character grams and GIN-indexes them,
--- so substring matches become containment lookups instead of full scans.
-CREATE INDEX logs_message_trgm_idx ON logs USING gin (message gin_trgm_ops);

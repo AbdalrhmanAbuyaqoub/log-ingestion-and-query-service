@@ -26,7 +26,7 @@ export function validateEntry(raw: unknown, now: number = Date.now()): ValidLogE
 
   const r = raw as Record<string, unknown>;
 
-  const tsRaw = r['timestamp'];
+  const tsRaw = r['timestamp']; // to-do: check iso validation
   if (typeof tsRaw !== 'string') return 'timestamp must be an ISO 8601 string';
   const tsMs = Date.parse(tsRaw);
   if (Number.isNaN(tsMs)) return 'timestamp must be a valid ISO 8601 timestamp';

@@ -15,3 +15,19 @@ export type ValidLogEntry = {
 export type Rejection = { index: number; reason: string };
 
 export type BatchResult = { valid: ValidLogEntry[]; rejected: Rejection[] };
+
+export type DbLogRow = {
+  id: string;
+  timestamp: Date;
+  level: LogLevel;
+  service: string;
+  message: string;
+  attributes: Attributes;
+};
+
+export type ApiLog = Omit<DbLogRow, 'timestamp'> & { timestamp: string };
+
+export type QueryLogsResult = {
+  logs: ApiLog[];
+  next_cursor: string | null;
+};

@@ -7,6 +7,5 @@ load/out/
 .env.*
 !.env.example
 AGENTS.md
-PLAN.md
-PROJECT_REQIREMENTS.md
 load/
+docs/

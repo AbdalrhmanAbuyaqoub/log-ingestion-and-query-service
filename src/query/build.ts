@@ -1,3 +1,5 @@
+import type { BuiltFilters, BuiltQuery, LogFilters, LogQuery } from './types.js';
+
 // SELECT id::text, "timestamp", level, service, message, attributes
 // FROM logs
 // WHERE
@@ -13,9 +15,33 @@
 // ORDER BY "timestamp" DESC, id DESC
 // LIMIT $k
 
-import type { BuiltQuery, LogQuery } from './types.js';
-
 export function buildQuery(log: LogQuery): BuiltQuery {
+  const filters = buildFilterWhere(log);
+  const params = [...filters.params];
+  let n = filters.nextPlaceholder;
+  let whereClause = filters.whereClause;
+
+  if (log.cursor) {
+    const cursorPredicate = `("timestamp", id) < ($${n++}, $${n++}::bigint)`;
+    params.push(log.cursor.t, log.cursor.id);
+    whereClause = whereClause
+      ? `${whereClause}\n  AND ${cursorPredicate}`
+      : `WHERE ${cursorPredicate}`;
+  }
+
+  const text = `
+SELECT id::text, "timestamp", level, service, message, attributes
+FROM logs
+${whereClause}
+ORDER BY "timestamp" DESC, id DESC
+LIMIT ${'$' + n}
+`.trim();
+  params.push(log.limit + 1);
+
+  return { text, params };
+}
+
+export function buildFilterWhere(filters: LogFilters): BuiltFilters {
   const where: string[] = [];
   const params: unknown[] = [];
   let n = 1;
@@ -31,29 +57,19 @@ export function buildQuery(log: LogQuery): BuiltQuery {
     return fragment.replaceAll('%P%', () => placeholders.shift() ?? '?');
   };
 
-  if (log.service !== undefined) where.push(push('service = %P%', log.service));
-  if (log.level) where.push(push('level = %P%', log.level));
-  if (log.since) where.push(push('"timestamp" >= %P%', log.since));
-  if (log.until) where.push(push('"timestamp" < %P%', log.until));
-  for (const attr of log.attrs) {
+  if (filters.service !== undefined) where.push(push('service = %P%', filters.service));
+  if (filters.level) where.push(push('level = %P%', filters.level));
+  if (filters.since) where.push(push('"timestamp" >= %P%', filters.since));
+  if (filters.until) where.push(push('"timestamp" < %P%', filters.until));
+  for (const attr of filters.attrs) {
     where.push(buildAttrFragment(attr.key, attr.values, push));
   }
-  if (log.q !== undefined) where.push(push("message ILIKE ('%' || %P% || '%') ESCAPE '\\'", log.q));
-  if (log.cursor) {
-    where.push(push('("timestamp", id) < (%P%, %P%::bigint)', log.cursor.t, log.cursor.id));
+  if (filters.q !== undefined) {
+    where.push(push("message ILIKE ('%' || %P% || '%') ESCAPE '\\'", filters.q));
   }
 
   const whereClause = where.length > 0 ? `WHERE ${where.join('\n  AND ')}` : '';
-  const text = `
-SELECT id::text, "timestamp", level, service, message, attributes
-FROM logs
-${whereClause}
-ORDER BY "timestamp" DESC, id DESC
-LIMIT ${'$' + n}
-`.trim();
-  params.push(log.limit + 1);
-
-  return { text, params };
+  return { whereClause, params, nextPlaceholder: n };
 }
 
 function buildAttrFragment(

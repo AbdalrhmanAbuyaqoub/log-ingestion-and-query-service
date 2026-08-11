@@ -4,6 +4,8 @@ import { ValidationError } from '../ingestion/errors.js';
 import { insertLogs } from '../ingestion/insert.js';
 import { parseLogsQuery } from '../query/parse.js';
 import { queryLogs } from '../query/index.js';
+import { parseAggregateQuery } from '../aggregation/parse.js';
+import { aggregateLogs } from '../aggregation/index.js';
 
 export function createLogsRouter(): Router {
   const router = Router();
@@ -21,6 +23,12 @@ export function createLogsRouter(): Router {
     const log = parseLogsQuery(req.query);
     const { logs, next_cursor } = await queryLogs(log);
     res.status(200).json({ logs, next_cursor });
+  });
+
+  router.get('/logs/aggregate', async (req, res) => {
+    const aggregate = parseAggregateQuery(req.query);
+    const result = await aggregateLogs(aggregate);
+    res.status(200).json(result);
   });
 
   return router;

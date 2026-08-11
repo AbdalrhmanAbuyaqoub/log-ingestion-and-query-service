@@ -248,3 +248,80 @@ describe('GET /logs', () => {
     expect(res.body).toEqual({ error: 'internal server error' });
   });
 });
+
+describe('GET /logs/aggregate', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
+  const path =
+    '/logs/aggregate?since=2026-08-10T10%3A00%3A00Z&until=2026-08-10T11%3A00%3A00Z&bucket=1m';
+
+  it('returns the exact empty response envelope', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    const res = await request(buildApp()).get(path);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ buckets: [] });
+  });
+
+  it('returns grouped buckets with numeric counts', async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [{ start: new Date('2026-08-10T10:00:00Z'), group: 'checkout', count: '4' }],
+    } as never);
+    const res = await request(buildApp()).get(`${path}&group_by=service`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      buckets: [{ start: '2026-08-10T10:00:00.000Z', group: 'checkout', count: 4 }],
+    });
+  });
+
+  it('accepts equal boundaries and still issues the half-open query', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    const equalPath =
+      '/logs/aggregate?since=2026-08-10T10%3A00%3A00Z&until=2026-08-10T10%3A00%3A00Z&bucket=1m';
+    const res = await request(buildApp()).get(equalPath);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ buckets: [] });
+    expect(vi.mocked(query).mock.calls[0]![0]).toContain('"timestamp" < $2');
+  });
+
+  it('combines and parameterizes aggregation filters', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    const res = await request(buildApp()).get(
+      `${path}&service=checkout&level=error&attr.region=eu&q=declined&group_by=level`,
+    );
+    expect(res.status).toBe(200);
+    const [text, params] = vi.mocked(query).mock.calls[0]!;
+    expect(text).toContain('level AS "group"');
+    expect(params).toEqual([
+      'checkout',
+      'error',
+      new Date('2026-08-10T10:00:00Z'),
+      new Date('2026-08-10T11:00:00Z'),
+      'region',
+      'eu',
+      'declined',
+      '1 minute',
+    ]);
+  });
+
+  it('returns 400 without querying for invalid parameters', async () => {
+    for (const invalidPath of [
+      '/logs/aggregate?until=2026-08-10T11%3A00%3A00Z&bucket=1m',
+      '/logs/aggregate?since=2026-08-10T10%3A00%3A00Z&until=2026-08-10T11%3A00%3A00Z&bucket=10m',
+      `${path}&group_by=message`,
+    ]) {
+      const res = await request(buildApp()).get(invalidPath);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: expect.any(String) });
+    }
+    expect(vi.mocked(query)).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when aggregation fails', async () => {
+    vi.mocked(query).mockRejectedValue(new Error('connection refused'));
+    const res = await request(buildApp()).get(path);
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'internal server error' });
+  });
+});

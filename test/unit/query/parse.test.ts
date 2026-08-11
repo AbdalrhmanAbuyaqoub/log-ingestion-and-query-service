@@ -146,6 +146,12 @@ describe('parseLogsQuery', () => {
     it('rejects repeated q values', () => {
       expect(() => parse({ q: ['one', 'two'] })).toThrow('q must not be repeated');
     });
+
+    it('rejects repeated service values', () => {
+      expect(() => parse({ service: ['checkout', 'auth'] })).toThrow(
+        'service must not be repeated',
+      );
+    });
   });
 
   describe('attribute filters', () => {

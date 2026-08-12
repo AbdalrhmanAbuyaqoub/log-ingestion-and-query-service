@@ -9,4 +9,9 @@ load/out/
 AGENTS.md
 load/
 docs/
-integration/
+
+# test/integration/
+# !test/integration/
+# test/integration/*
+# !test/integration/retention.test.ts
+test/integration/database.test.ts

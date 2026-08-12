@@ -5,10 +5,14 @@ vi.mock('../../../src/db/index.js', () => ({
   getClient: vi.fn(),
   close: vi.fn(),
 }));
+vi.mock('../../../src/retention/partition-manager.js', () => ({
+  ensurePartitionsForTimestamps: vi.fn().mockResolvedValue(0),
+}));
 
 import { insertLogs } from '../../../src/ingestion/insert.js';
 import { query } from '../../../src/db/index.js';
 import type { ValidLogEntry } from '../../../src/ingestion/types.js';
+import { ensurePartitionsForTimestamps } from '../../../src/retention/partition-manager.js';
 
 function entry(overrides: Partial<ValidLogEntry> = {}): ValidLogEntry {
   return {
@@ -24,6 +28,7 @@ function entry(overrides: Partial<ValidLogEntry> = {}): ValidLogEntry {
 describe('insertLogs', () => {
   beforeEach(() => {
     vi.mocked(query).mockReset();
+    vi.mocked(ensurePartitionsForTimestamps).mockClear();
   });
 
   it('returns 0 and issues no query when entries is empty', async () => {
@@ -38,6 +43,7 @@ describe('insertLogs', () => {
 
     await insertLogs(entries);
 
+    expect(vi.mocked(ensurePartitionsForTimestamps)).toHaveBeenCalledOnce();
     expect(vi.mocked(query)).toHaveBeenCalledTimes(1);
     const [text, values] = vi.mocked(query).mock.calls[0]!;
     expect(text).toMatch(/INSERT INTO logs/);

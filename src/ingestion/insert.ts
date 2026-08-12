@@ -1,5 +1,7 @@
 import { query } from '../db/index.js';
 import type { ValidLogEntry } from './types.js';
+import { ensurePartitionsForTimestamps } from '../retention/partition-manager.js';
+import { loadRetentionDays } from '../config.js';
 
 /**
  * Inserts a batch of validated log entries in a single statement via
@@ -9,6 +11,11 @@ import type { ValidLogEntry } from './types.js';
  */
 export async function insertLogs(entries: ValidLogEntry[]): Promise<number> {
   if (entries.length === 0) return 0;
+
+  await ensurePartitionsForTimestamps(
+    entries.map((entry) => entry.timestamp),
+    loadRetentionDays(),
+  );
 
   const timestamps = entries.map((e) => e.timestamp);
   const levels = entries.map((e) => e.level);

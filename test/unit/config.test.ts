@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../../src/config.js';
+import { loadConfig, loadRetentionDays } from '../../src/config.js';
 
 describe('loadConfig', () => {
   it('applies defaults when only DATABASE_URL is provided', () => {
@@ -33,5 +33,11 @@ describe('loadConfig', () => {
 
   it('rejects non-positive retention days', () => {
     expect(() => loadConfig({ DATABASE_URL: 'x', RETENTION_DAYS: '0' })).toThrow();
+  });
+});
+
+describe('loadRetentionDays', () => {
+  it('does not require unrelated database configuration', () => {
+    expect(loadRetentionDays({ RETENTION_DAYS: '14' })).toBe(14);
   });
 });

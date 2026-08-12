@@ -28,8 +28,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compose smoke test
+      - name: Start stack
+        run: docker compose up -d --build --wait
+      - name: Smoke test endpoints
         run: |
-          docker compose up -d --build --wait
           curl -fsS http://localhost:8080/health
-          docker compose down -v
+          curl -fsS \
+            -H 'Content-Type: application/json' \
+            --data '{"logs":[{"timestamp":"2020-01-01T12:00:00Z","level":"info","service":"ci-smoke","message":"compose smoke test","attributes":{"source":"ci"}}]}' \
+            http://localhost:8080/logs
+          curl -fsS 'http://localhost:8080/logs?service=ci-smoke'
+          curl -fsS 'http://localhost:8080/logs/aggregate?since=2020-01-01T00%3A00%3A00Z&until=2020-01-02T00%3A00%3A00Z&bucket=1h'
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

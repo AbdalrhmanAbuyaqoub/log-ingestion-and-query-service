@@ -1,7 +1,6 @@
 node_modules/
 dist/
 coverage/
-load/out/
 *.log
 .env
 .env.*
@@ -9,9 +8,5 @@ load/out/
 AGENTS.md
 load/
 docs/
-
-# test/integration/
-# !test/integration/
-# test/integration/*
-# !test/integration/retention.test.ts
 test/integration/database.test.ts
+/scripts/

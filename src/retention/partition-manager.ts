@@ -3,9 +3,12 @@ import { getClient } from '../db/index.js';
 
 const DAY_MS = 86_400_000;
 const PARTITION_RE = /^logs_p(\d{4})_(\d{2})_(\d{2})$/;
+const ROLLUP_PARTITION_RE = /^log_rollups_1m_p(\d{4})_(\d{2})_(\d{2})$/;
 const LEGACY_PARTITION_RE = /^logs_(\d{4})(\d{2})(\d{2})$/;
 const ROTATED_RE = /^logs_default_detached_(\d+)$/;
 const ADVISORY_LOCK_KEY = 1_813_047_329;
+const knownPartitions = new Set<string>();
+const partitionChecks = new Map<string, Promise<number>>();
 
 type Queryable = Pick<pg.PoolClient, 'query'>;
 
@@ -36,6 +39,7 @@ export function isDayRetained(day: Date, now: Date, retentionDays: number): bool
 function quoteIdentifier(identifier: string): string {
   if (
     !PARTITION_RE.test(identifier) &&
+    !ROLLUP_PARTITION_RE.test(identifier) &&
     !LEGACY_PARTITION_RE.test(identifier) &&
     !ROTATED_RE.test(identifier)
   ) {
@@ -48,21 +52,41 @@ function bound(day: Date): string {
   return utcDayStart(day).toISOString();
 }
 
+function rollupPartitionName(day: Date): string {
+  return partitionName(day).replace(/^logs_p/, 'log_rollups_1m_p');
+}
+
+async function ensureRollupPartition(client: Queryable, day: Date): Promise<void> {
+  const start = utcDayStart(day);
+  const end = new Date(start.getTime() + DAY_MS);
+  const name = rollupPartitionName(start);
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} PARTITION OF log_rollups_1m
+       FOR VALUES FROM ('${bound(start)}') TO ('${bound(end)}')`,
+  );
+}
+
 async function createPartition(client: Queryable, day: Date): Promise<boolean> {
   const start = utcDayStart(day);
   const end = new Date(start.getTime() + DAY_MS);
   const name = partitionName(start);
-  if (await partitionExists(client, day)) return false;
+  if (await partitionExists(client, day)) {
+    await ensureRollupPartition(client, day);
+    return false;
+  }
 
   await client.query(
     `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} PARTITION OF logs
        FOR VALUES FROM ('${bound(start)}') TO ('${bound(end)}')`,
   );
+  knownPartitions.add(name);
+  await ensureRollupPartition(client, day);
   return true;
 }
 
 async function partitionExists(client: Queryable, day: Date): Promise<boolean> {
   const canonicalName = partitionName(day);
+  if (knownPartitions.has(canonicalName)) return true;
   const legacyName = canonicalName.replace(/^logs_p(\d{4})_(\d{2})_(\d{2})$/, 'logs_$1$2$3');
   const existing = await client.query<{ exists: boolean }>(
     `SELECT EXISTS (
@@ -73,7 +97,9 @@ async function partitionExists(client: Queryable, day: Date): Promise<boolean> {
      ) AS exists`,
     [[canonicalName, legacyName]],
   );
-  return existing.rows[0]?.exists === true;
+  const exists = existing.rows[0]?.exists === true;
+  if (exists) knownPartitions.add(canonicalName);
+  return exists;
 }
 
 export async function ensurePartitionsForTimestamps(
@@ -88,22 +114,32 @@ export async function ensurePartitionsForTimestamps(
   }
   if (days.size === 0) return 0;
 
+  const results = await Promise.all([...days.values()].map(ensurePartition));
+  return results.reduce((sum, created) => sum + created, 0);
+}
+
+function ensurePartition(day: Date): Promise<number> {
+  const name = partitionName(day);
+  if (knownPartitions.has(name)) return Promise.resolve(0);
+  const pending = partitionChecks.get(name);
+  if (pending) return pending;
+
+  const check = ensurePartitionUncached(day).finally(() => partitionChecks.delete(name));
+  partitionChecks.set(name, check);
+  return check;
+}
+
+async function ensurePartitionUncached(day: Date): Promise<number> {
   const client = await getClient();
-  let created = 0;
   let locked = false;
   try {
-    const missing: Date[] = [];
-    for (const day of days.values()) {
-      if (!(await partitionExists(client, day))) missing.push(day);
+    if (await partitionExists(client, day)) {
+      await ensureRollupPartition(client, day);
+      return 0;
     }
-    if (missing.length === 0) return 0;
-
     await client.query('SELECT pg_advisory_lock($1)', [ADVISORY_LOCK_KEY]);
     locked = true;
-    for (const day of missing) {
-      if (await createPartition(client, day)) created++;
-    }
-    return created;
+    return (await createPartition(client, day)) ? 1 : 0;
   } finally {
     try {
       if (locked) await client.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]);
@@ -232,6 +268,8 @@ export async function runPartitionMaintenance(
       const day = dayFromPartitionName(name);
       if (day && !isDayRetained(day, now, retentionDays)) {
         await client.query(`DROP TABLE ${quoteIdentifier(name)}`);
+        await client.query(`DROP TABLE IF EXISTS ${quoteIdentifier(rollupPartitionName(day))}`);
+        knownPartitions.delete(partitionName(day));
         result.dropped++;
       }
     }

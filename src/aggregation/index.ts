@@ -1,9 +1,11 @@
 import { query } from '../db/index.js';
-import { buildAggregateQuery } from './build.js';
+import { buildAggregateQuery, buildRollupAggregateQuery, canUseRollups } from './build.js';
 import type { AggregateBucket, AggregateQuery, AggregateResult, DbAggregateRow } from './types.js';
 
 export async function aggregateLogs(aggregate: AggregateQuery): Promise<AggregateResult> {
-  const { text, params } = buildAggregateQuery(aggregate);
+  const { text, params } = canUseRollups(aggregate)
+    ? buildRollupAggregateQuery(aggregate)
+    : buildAggregateQuery(aggregate);
   const { rows } = await query<DbAggregateRow>(text, params);
   return { buckets: rows.map(toAggregateBucket) };
 }

@@ -5,6 +5,7 @@ import { close as closeDb } from './db/index.js';
 import { buildApp } from './app.js';
 import { runPartitionMaintenance } from './retention/partition-manager.js';
 import { startPartitionScheduler } from './retention/scheduler.js';
+import { stopIngestionCoordinator } from './ingestion/coordinator.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -21,9 +22,15 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`${signal} received, shutting down`);
     server.close();
-    await partitionScheduler.stop();
-    await closeDb();
-    process.exit(0);
+    try {
+      await partitionScheduler.stop();
+      await stopIngestionCoordinator();
+    } catch (error: unknown) {
+      console.error('graceful shutdown failed', error);
+    } finally {
+      await closeDb();
+      process.exit(0);
+    }
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));

@@ -38,7 +38,7 @@ describe('insertLogs', () => {
   });
 
   it('issues one INSERT via unnest with five arrays', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 2 } as never);
+    vi.mocked(query).mockResolvedValue({ rows: [{ accepted: '2' }], rowCount: 1 } as never);
     const entries = [entry(), entry({ level: 'info' })];
 
     await insertLogs(entries);
@@ -48,6 +48,8 @@ describe('insertLogs', () => {
     const [text, values] = vi.mocked(query).mock.calls[0]!;
     expect(text).toMatch(/INSERT INTO logs/);
     expect(text).toMatch(/unnest/);
+    expect(text).toMatch(/INSERT INTO log_rollups_1m/);
+    expect(text).toMatch(/ON CONFLICT/);
     expect(text).toMatch(/\$1::timestamptz\[\]/);
     expect(text).toMatch(/\$5::jsonb\[\]/);
     expect(values).toHaveLength(5);
@@ -60,15 +62,16 @@ describe('insertLogs', () => {
   });
 
   it('returns rowCount when the driver reports it', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 7 } as never);
+    vi.mocked(query).mockResolvedValue({ rows: [{ accepted: '7' }], rowCount: 1 } as never);
     const n = await insertLogs(Array.from({ length: 7 }, () => entry()));
     expect(n).toBe(7);
   });
 
-  it('falls back to entries.length when rowCount is undefined', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
-    const n = await insertLogs([entry(), entry(), entry()]);
-    expect(n).toBe(3);
+  it('rejects an invalid accepted count', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ accepted: 'invalid' }] } as never);
+    await expect(insertLogs([entry(), entry(), entry()])).rejects.toThrow(
+      'database returned an invalid accepted count',
+    );
   });
 
   it('propagates driver errors', async () => {

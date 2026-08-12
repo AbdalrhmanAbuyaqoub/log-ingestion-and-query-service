@@ -57,8 +57,35 @@ describe('partition operations', () => {
       ),
     ).resolves.toBe(0);
 
-    expect(query).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledTimes(2);
     expect(String(query.mock.calls[0]?.[0])).not.toContain('pg_advisory_lock');
+    expect(String(query.mock.calls[1]?.[0])).toContain('log_rollups_1m');
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('caches confirmed partitions and deduplicates concurrent checks', async () => {
+    let finishCheck!: () => void;
+    const checkBlocked = new Promise<void>((resolve) => {
+      finishCheck = resolve;
+    });
+    const query = vi.fn(async () => {
+      await checkBlocked;
+      return { rows: [{ exists: true }] };
+    });
+    const release = vi.fn();
+    vi.mocked(getClient).mockResolvedValue({ query, release } as never);
+    const timestamp = new Date('2026-09-01T12:00:00Z');
+    const now = new Date('2026-09-02T12:00:00Z');
+
+    const first = ensurePartitionsForTimestamps([timestamp], 30, now);
+    const second = ensurePartitionsForTimestamps([timestamp], 30, now);
+    await vi.waitFor(() => expect(getClient).toHaveBeenCalledOnce());
+    finishCheck();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([0, 0]);
+    await expect(ensurePartitionsForTimestamps([timestamp], 30, now)).resolves.toBe(0);
+    expect(getClient).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledOnce();
   });
 

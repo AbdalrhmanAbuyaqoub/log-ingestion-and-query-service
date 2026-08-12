@@ -218,7 +218,9 @@ The HTTP layer only parses requests and writes responses. Validation and ingesti
 
 ### Ingestion path
 
-Validation is hand-written to collect per-entry failures and minimize work on the half-CPU hot path. Each request converts accepted fields to parallel arrays and performs one parameterized `INSERT ... SELECT FROM unnest(...)`. There is no in-memory queue or background flush: an HTTP 200 means PostgreSQL accepted the rows, and they are immediately visible to queries.
+Validation is hand-written to collect per-entry failures and minimize work on the half-CPU hot path. Valid entries from concurrent requests are coalesced into one parameterized `INSERT ... SELECT FROM unnest(...)` when 500 entries accumulate or the oldest request has waited 50 ms. Request boundaries and rejection indexes are preserved, and a response is sent only after the combined insert commits, so HTTP 200 still means the request's logs are durable and immediately queryable.
+
+The waiting queue is capped at 10,000 entries. A request that would exceed the cap is rejected in full with HTTP 503 and `Retry-After: 1`; buffered data is never acknowledged early. Shutdown stops admission and drains queued writes before closing PostgreSQL.
 
 Before inserting retained late-arriving timestamps, the service ensures their daily partitions exist. Input outside the retained window can safely enter the default partition and is removed during maintenance.
 
@@ -237,6 +239,8 @@ Before inserting retained late-arriving timestamps, the service ensures their da
 
 The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The `(service, timestamp DESC, id DESC)` index accelerates the common service-filtered paginated query. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
 
+An atomic one-minute rollup keyed by timestamp, service, and level accelerates aggregates that do not use attribute or message filters. Arbitrary range boundaries remain exact by subtracting raw rows outside the requested half-open range from the boundary-minute rollups. Attribute- and message-filtered aggregates continue to use canonical logs. Rollup partitions follow the same daily creation and `DROP` retention lifecycle as raw-log partitions.
+
 All user values are SQL parameters. The only dynamic aggregation expressions and partition identifiers come from fixed allowlists or strictly validated internal names.
 
 ### Attribute storage
@@ -251,11 +255,14 @@ The default safety partition is rotated when it contains rows. Still-retained ro
 
 ## Configuration and operations
 
-| Variable         | Required/default               | Local development                                              | Compose stack                                   |
-| ---------------- | ------------------------------ | -------------------------------------------------------------- | ----------------------------------------------- |
-| `DATABASE_URL`   | Required                       | `postgres://logs:logs@localhost:5433/logs` from `.env.example` | Injected as `postgres://logs:logs@db:5432/logs` |
-| `PORT`           | Default `8080`                 | Read from `.env`/process environment                           | Injected as `8080` and published on host 8080   |
-| `RETENTION_DAYS` | Default `30`; positive integer | Read from `.env`/process environment                           | Injected as `30`                                |
+| Variable                   | Required/default                  | Local development                                              | Compose stack                                   |
+| -------------------------- | --------------------------------- | -------------------------------------------------------------- | ----------------------------------------------- |
+| `DATABASE_URL`             | Required                          | `postgres://logs:logs@localhost:5433/logs` from `.env.example` | Injected as `postgres://logs:logs@db:5432/logs` |
+| `PORT`                     | Default `8080`                    | Read from `.env`/process environment                           | Injected as `8080` and published on host 8080   |
+| `RETENTION_DAYS`           | Default `30`; positive integer    | Read from `.env`/process environment                           | Injected as `30`                                |
+| `INGEST_FLUSH_INTERVAL_MS` | Default `50`; positive integer    | Maximum wait before a partial ingest flush                     | Injected as `50`                                |
+| `INGEST_FLUSH_BATCH_SIZE`  | Default `500`; positive integer   | Entry count that triggers an immediate flush                   | Injected as `500`                               |
+| `INGEST_BUFFER_MAX`        | Default `10000`; positive integer | Maximum entries waiting behind the active flush                | Injected as `10000`                             |
 
 No authentication, API keys, multi-tenancy, rate limiting, dashboards, or other optional contract-changing features are implemented. A plain `docker compose up` therefore exposes all four core endpoints without credentials or additional configuration. Unrecognized bearer tokens are harmless because there is no authentication middleware.
 
@@ -291,7 +298,7 @@ See the [load-test guide](load/README.md) for prerequisites, commands, scenario 
 
 - Arbitrary attribute filters are not indexed and can scan all rows in the selected time partitions.
 - Message substring search uses `ILIKE` without a trigram index to protect ingestion throughput; broad or unbounded searches can be expensive.
-- Aggregation computes counts at query time and omits empty buckets; there are no rollup tables.
+- Attribute- and message-filtered aggregation computes counts from raw logs and can be expensive over broad ranges.
 - The deployment is a single application container and a single PostgreSQL instance, with no replication or horizontal sharding.
 - Retention works at UTC-day granularity, so effective retention can exceed the configured duration by less than one day.
 - Authentication, tenancy, rate limiting, compression, metrics export, and dashboards are not implemented.

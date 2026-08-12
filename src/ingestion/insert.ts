@@ -24,17 +24,42 @@ export async function insertLogs(entries: ValidLogEntry[]): Promise<number> {
   const attrs = entries.map((e) => JSON.stringify(e.attributes));
 
   const text = `
-    INSERT INTO logs ("timestamp", level, service, message, attributes)
-    SELECT t, l, s, m, a
-    FROM unnest(
-      $1::timestamptz[],
-      $2::text[],
-      $3::text[],
-      $4::text[],
-      $5::jsonb[]
-    ) AS u(t, l, s, m, a)
+    WITH inserted AS MATERIALIZED (
+      INSERT INTO logs ("timestamp", level, service, message, attributes)
+      SELECT t, l, s, m, a
+      FROM unnest(
+        $1::timestamptz[],
+        $2::text[],
+        $3::text[],
+        $4::text[],
+        $5::jsonb[]
+      ) AS u(t, l, s, m, a)
+      RETURNING "timestamp", service, level
+    ), rolled_up AS (
+      INSERT INTO log_rollups_1m (bucket_start, service, level, count)
+      SELECT
+        date_bin('1 minute'::interval, "timestamp", '1970-01-01T00:00:00Z'::timestamptz),
+        service,
+        level,
+        COUNT(*)
+      FROM inserted
+      GROUP BY 1, 2, 3
+      ON CONFLICT (bucket_start, service, level)
+      DO UPDATE SET count = log_rollups_1m.count + EXCLUDED.count
+    )
+    SELECT COUNT(*)::text AS accepted FROM inserted
   `;
 
-  const result = await query(text, [timestamps, levels, services, messages, attrs]);
-  return result.rowCount ?? entries.length;
+  const result = await query<{ accepted: string }>(text, [
+    timestamps,
+    levels,
+    services,
+    messages,
+    attrs,
+  ]);
+  const accepted = Number(result.rows[0]?.accepted);
+  if (!Number.isSafeInteger(accepted) || accepted < 0) {
+    throw new Error('database returned an invalid accepted count');
+  }
+  return accepted;
 }

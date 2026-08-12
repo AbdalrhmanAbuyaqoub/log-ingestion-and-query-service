@@ -19,6 +19,13 @@ describe('aggregateLogs', () => {
   it('returns an empty buckets envelope', async () => {
     vi.mocked(query).mockResolvedValue({ rows: [] } as never);
     await expect(aggregateLogs(aggregate)).resolves.toEqual({ buckets: [] });
+    expect(vi.mocked(query).mock.calls[0]?.[0]).toContain('log_rollups_1m');
+  });
+
+  it('uses canonical logs when a filter cannot be represented by rollups', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    await aggregateLogs({ ...aggregate, q: 'timeout' });
+    expect(vi.mocked(query).mock.calls[0]?.[0]).not.toContain('log_rollups_1m');
   });
 
   it('maps timestamps, nullable groups, and numeric counts', async () => {

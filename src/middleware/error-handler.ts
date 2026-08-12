@@ -9,7 +9,7 @@ import type { ErrorRequestHandler } from 'express';
  */
 
 type ExpressJsonError = SyntaxError & { type?: string; statusCode?: number };
-type HttpError = Error & { statusCode?: number; type?: string };
+type HttpError = Error & { statusCode?: number; type?: string; retryAfter?: string };
 
 export const errorMiddleware: ErrorRequestHandler = (err: HttpError, _req, res, _next) => {
   // express.json() syntax errors carry a `type` of 'entity.parse.failed'.
@@ -22,6 +22,10 @@ export const errorMiddleware: ErrorRequestHandler = (err: HttpError, _req, res, 
   }
 
   const statusCode: number = err.statusCode ?? 500;
+  if (statusCode === 503 && err.retryAfter) {
+    res.set('Retry-After', err.retryAfter);
+    return res.status(503).json({ error: err.message });
+  }
   if (statusCode >= 400 && statusCode < 500) {
     return res.status(statusCode).json({ error: err.message });
   }

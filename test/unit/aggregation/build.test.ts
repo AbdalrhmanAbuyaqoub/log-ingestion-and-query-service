@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildAggregateQuery } from '../../../src/aggregation/build.js';
+import {
+  buildAggregateQuery,
+  buildRollupAggregateQuery,
+  canUseRollups,
+} from '../../../src/aggregation/build.js';
 import type { AggregateQuery } from '../../../src/aggregation/types.js';
 
 function aggregate(overrides: Partial<AggregateQuery> = {}): AggregateQuery {
@@ -81,5 +85,31 @@ describe('buildAggregateQuery', () => {
     );
     expect(built.text).not.toContain(attack);
     expect(built.params.filter((value) => value === attack)).toHaveLength(4);
+  });
+});
+
+describe('buildRollupAggregateQuery', () => {
+  it('uses rollups for supported filters and raw logs only at partial minute boundaries', () => {
+    const input = aggregate({ service: 'checkout', level: 'error', groupBy: 'service' });
+    expect(canUseRollups(input)).toBe(true);
+
+    const built = buildRollupAggregateQuery(input);
+
+    expect(built.text).toContain('FROM log_rollups_1m r');
+    expect(built.text).toContain('FROM logs l');
+    expect(built.text).toContain('r.bucket_start >= b.rollup_start');
+    expect(built.text).toContain('l."timestamp" < $1');
+    expect(built.text).toContain('l."timestamp" >= $2');
+    expect(built.text).toContain('-1::bigint AS count');
+    expect(built.text).toContain('HAVING SUM(count) > 0');
+    expect(built.text).toContain('r.service = $3');
+    expect(built.text).toContain('l.level = $4');
+    expect(built.text).toContain('date_bin($5::interval');
+    expect(built.params).toEqual([input.since, input.until, 'checkout', 'error', '1 minute']);
+  });
+
+  it('falls back to raw aggregation for attribute or message filters', () => {
+    expect(canUseRollups(aggregate({ attrs: [{ key: 'region', values: ['eu'] }] }))).toBe(false);
+    expect(canUseRollups(aggregate({ q: 'timeout' }))).toBe(false);
   });
 });

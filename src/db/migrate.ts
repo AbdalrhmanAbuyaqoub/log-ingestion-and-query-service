@@ -12,7 +12,10 @@ const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '..', '..', 'migrations
  * its healthcheck passes (DNS propagation, restarts), so startup must not
  * crash on the first failed attempt.
  */
-export async function runMigrations(config: Config, maxAttempts = 15): Promise<void> {
+export async function runMigrations(
+  config: Pick<Config, 'DATABASE_URL'>,
+  maxAttempts = 15,
+): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {

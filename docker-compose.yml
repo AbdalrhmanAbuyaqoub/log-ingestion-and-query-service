@@ -42,9 +42,9 @@ services:
       PORT: '8080'
       DATABASE_URL: postgres://logs:logs@db:5432/logs
       RETENTION_DAYS: '30'
-      INGEST_FLUSH_INTERVAL_MS: '150'
+      INGEST_FLUSH_INTERVAL_MS: '50'
       INGEST_FLUSH_BATCH_SIZE: '500'
-      INGEST_BUFFER_MAX: '50000'
+      INGEST_BUFFER_MAX: '10000'
     depends_on:
       db:
         condition: service_healthy

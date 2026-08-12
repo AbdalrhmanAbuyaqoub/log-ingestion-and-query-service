@@ -21,7 +21,10 @@ describe('partition management and retention', () => {
     process.env.DATABASE_URL = databaseUrl;
     process.env.RETENTION_DAYS = '30';
     verificationPool = new pg.Pool({ connectionString: databaseUrl });
-    const migration = await readFile(new URL('../../migrations/001_initial.sql', import.meta.url), 'utf8');
+    const migration = await readFile(
+      new URL('../../migrations/001_initial.sql', import.meta.url),
+      'utf8',
+    );
     await verificationPool.query(migration);
 
     ({ runPartitionMaintenance } = await import('../../src/retention/partition-manager.js'));

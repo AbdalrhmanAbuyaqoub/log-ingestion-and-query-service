@@ -30,10 +30,10 @@ export function buildQuery(log: LogQuery): BuiltQuery {
   }
 
   const text = `
-SELECT id::text, "timestamp", level, service, message, attributes
-FROM logs
+SELECT l.id::text, l."timestamp", l.level, l.service, l.message, l.attributes
+FROM logs AS l
 ${whereClause}
-ORDER BY "timestamp" DESC, id DESC
+ORDER BY l."timestamp" DESC, l.id DESC
 LIMIT ${'$' + n}
 `.trim();
   params.push(log.limit + 1);

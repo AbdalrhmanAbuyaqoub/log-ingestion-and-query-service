@@ -54,7 +54,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     'INGEST_FLUSH_BATCH_SIZE',
     500,
   );
-  const INGEST_BUFFER_MAX = parsePositiveInt(env.INGEST_BUFFER_MAX, 'INGEST_BUFFER_MAX', 10_000);
+  const INGEST_BUFFER_MAX = parsePositiveInt(env.INGEST_BUFFER_MAX, 'INGEST_BUFFER_MAX', 50_000);
 
   return {
     PORT,

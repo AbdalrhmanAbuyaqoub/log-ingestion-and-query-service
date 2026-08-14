@@ -163,10 +163,30 @@ describe('required API endpoints', () => {
     expect(persisted.rows[0]?.count).toBe('8');
   });
 
+  it('orders equal timestamps by numeric bigint id across cursor pages', async () => {
+    const timestamp = '2026-08-10T10:00:00Z';
+    const logs = Array.from({ length: 12 }, () => logEntry({ timestamp }));
+    expect((await request(app).post('/logs').send({ logs })).status).toBe(200);
+
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 3; page += 1) {
+      const response = await request(app)
+        .get('/logs')
+        .query({ limit: 5, ...(cursor ? { cursor } : {}) });
+      expect(response.status).toBe(200);
+      ids.push(...response.body.logs.map((log: { id: string }) => log.id));
+      cursor = response.body.next_cursor ?? undefined;
+    }
+
+    expect(ids).toEqual(Array.from({ length: 12 }, (_, index) => String(12 - index)));
+    expect(cursor).toBeUndefined();
+  });
+
   it('rejects a request larger than the waiting buffer without persisting part of it', async () => {
     const response = await request(app)
       .post('/logs')
-      .send({ logs: Array.from({ length: 10_001 }, () => logEntry()) });
+      .send({ logs: Array.from({ length: 50_001 }, () => logEntry()) });
 
     expect(response.status).toBe(503);
     expect(response.headers['retry-after']).toBe('1');

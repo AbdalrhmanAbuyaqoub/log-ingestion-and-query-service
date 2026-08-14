@@ -8,7 +8,7 @@ describe('loadConfig', () => {
     expect(config.RETENTION_DAYS).toBe(30);
     expect(config.INGEST_FLUSH_INTERVAL_MS).toBe(50);
     expect(config.INGEST_FLUSH_BATCH_SIZE).toBe(500);
-    expect(config.INGEST_BUFFER_MAX).toBe(10_000);
+    expect(config.INGEST_BUFFER_MAX).toBe(50_000);
   });
 
   it('coerces numeric strings from the environment', () => {

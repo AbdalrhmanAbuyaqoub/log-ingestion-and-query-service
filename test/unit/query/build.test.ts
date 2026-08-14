@@ -12,9 +12,9 @@ describe('buildQuery', () => {
   it('builds the default ordered query with one extra row for pagination', () => {
     const built = buildQuery(logQuery());
 
-    expect(built.text).toContain('FROM logs');
+    expect(built.text).toContain('FROM logs AS l');
     expect(built.text).not.toContain('WHERE');
-    expect(built.text).toContain('ORDER BY "timestamp" DESC, id DESC');
+    expect(built.text).toContain('ORDER BY l."timestamp" DESC, l.id DESC');
     expect(built.text).toContain('LIMIT $1');
     expect(built.params).toEqual([101]);
   });

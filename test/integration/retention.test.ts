@@ -28,6 +28,15 @@ describe('partition management and retention', () => {
       );
       await verificationPool.query(migration);
     }
+    await verificationPool.query(`
+      CREATE TABLE logs_p2026_08_11 PARTITION OF logs
+      FOR VALUES FROM ('2026-08-11T00:00:00.000Z') TO ('2026-08-12T00:00:00.000Z')
+    `);
+    const requestIdMigration = await readFile(
+      new URL('../../migrations/003_request_id_index.sql', import.meta.url),
+      'utf8',
+    );
+    await verificationPool.query(requestIdMigration);
 
     ({ runPartitionMaintenance } = await import('../../src/retention/partition-manager.js'));
     ({ close: closeServicePool } = await import('../../src/db/index.js'));
@@ -77,10 +86,20 @@ describe('partition management and retention', () => {
     expect(children.rows.map((row) => row.name)).toEqual([
       'logs_default',
       'logs_p2026_08_01',
+      'logs_p2026_08_11',
       'logs_p2026_08_12',
       'logs_p2026_08_13',
       'logs_p2026_08_14',
     ]);
+
+    const requestIdIndexes = await verificationPool.query<{ count: string }>(`
+      SELECT count(*)
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexdef LIKE '%request_id%'
+        AND tablename IN ('logs', 'logs_p2026_08_11', 'logs_p2026_08_14')
+    `);
+    expect(requestIdIndexes.rows[0]?.count).toBe('3');
 
     const detached = await verificationPool.query(
       `SELECT 1 FROM pg_class WHERE relname LIKE 'logs_default_detached_%'`,

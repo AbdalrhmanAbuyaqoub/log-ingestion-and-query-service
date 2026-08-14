@@ -14,8 +14,6 @@ import { notFoundMiddleware } from './middleware/not-found.js';
 export function buildApp(): express.Express {
   const app = express();
 
-  app.set('json spaces', 2);
-
   // app.use(middlewareLogResponses);
 
   // Batches of up to ~1000 entries must fit; Express's default is 1MB.

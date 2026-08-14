@@ -44,7 +44,7 @@ services:
       RETENTION_DAYS: '30'
       INGEST_FLUSH_INTERVAL_MS: '50'
       INGEST_FLUSH_BATCH_SIZE: '500'
-      INGEST_BUFFER_MAX: '10000'
+      INGEST_BUFFER_MAX: '50000'
     depends_on:
       db:
         condition: service_healthy

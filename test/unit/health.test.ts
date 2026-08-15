@@ -48,6 +48,42 @@ describe('malformed JSON body', () => {
   });
 });
 
+describe('POST /logs with only invalid entries', () => {
+  it('returns every rejection with an accepted count of zero', async () => {
+    vi.mocked(query).mockReset();
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/logs')
+      .send({
+        logs: [
+          {
+            timestamp: '2026-08-10T10:00:00Z',
+            level: 'critical',
+            service: 'api',
+            message: 'first invalid entry',
+          },
+          {
+            timestamp: '2026-08-10T10:00:00Z',
+            level: 'fatal',
+            service: 'api',
+            message: 'second invalid entry',
+          },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      accepted: 0,
+      rejected: [
+        { index: 0, reason: "invalid level: 'critical'" },
+        { index: 1, reason: "invalid level: 'fatal'" },
+      ],
+    });
+    expect(query).not.toHaveBeenCalled();
+  });
+});
+
 describe('unknown route', () => {
   it('returns 404 with { error: "not found" }', async () => {
     vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as never);

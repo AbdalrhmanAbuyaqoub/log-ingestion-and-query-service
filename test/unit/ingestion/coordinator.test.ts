@@ -66,7 +66,42 @@ describe('IngestionCoordinator', () => {
     expect(insert).toHaveBeenCalledOnce();
   });
 
-  it('serializes flushes and sends arrivals during a write in the next batch', async () => {
+  it('serializes flushes and snapshots every request queued during the active write', async () => {
+    const firstInsert = deferred<number>();
+    const insert = vi
+      .fn<(entries: ValidLogEntry[]) => Promise<number>>()
+      .mockReturnValueOnce(firstInsert.promise)
+      .mockImplementation(async (entries) => entries.length);
+    const coordinator = new IngestionCoordinator({
+      flushIntervalMs: 50,
+      flushBatchSize: 3,
+      bufferMax: 20,
+      insert,
+    });
+
+    const first = coordinator.enqueue([entry(1), entry(2), entry(3)]);
+    const second = coordinator.enqueue([entry(4), entry(5)]);
+    const third = coordinator.enqueue([entry(6), entry(7)]);
+    const fourth = coordinator.enqueue([entry(8), entry(9), entry(10)]);
+    expect(insert).toHaveBeenCalledOnce();
+
+    firstInsert.resolve(3);
+    await expect(first).resolves.toBe(3);
+    await expect(Promise.all([second, third, fourth])).resolves.toEqual([2, 2, 3]);
+    expect(insert).toHaveBeenCalledTimes(2);
+    expect(insert.mock.calls[1]?.[0].map((item) => item.message)).toEqual([
+      'entry 4',
+      'entry 5',
+      'entry 6',
+      'entry 7',
+      'entry 8',
+      'entry 9',
+      'entry 10',
+    ]);
+  });
+
+  it('isolates a failed flush from later queued work without retrying', async () => {
+    const failure = new Error('database unavailable');
     const firstInsert = deferred<number>();
     const insert = vi
       .fn<(entries: ValidLogEntry[]) => Promise<number>>()
@@ -75,36 +110,23 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 50,
       flushBatchSize: 2,
-      bufferMax: 10,
-      insert,
-    });
-
-    const first = coordinator.enqueue([entry(1), entry(2)]);
-    const second = coordinator.enqueue([entry(3), entry(4)]);
-    expect(insert).toHaveBeenCalledOnce();
-
-    firstInsert.resolve(2);
-    await expect(first).resolves.toBe(2);
-    await expect(second).resolves.toBe(2);
-    expect(insert).toHaveBeenCalledTimes(2);
-  });
-
-  it('rejects every request in a failed flush without retrying', async () => {
-    const failure = new Error('database unavailable');
-    const insert = vi.fn().mockRejectedValue(failure);
-    const coordinator = new IngestionCoordinator({
-      flushIntervalMs: 50,
-      flushBatchSize: 2,
-      bufferMax: 10,
+      bufferMax: 20,
       insert,
     });
 
     const first = coordinator.enqueue([entry(1)]);
     const second = coordinator.enqueue([entry(2)]);
+    const later = coordinator.enqueue([entry(3), entry(4)]);
+    const firstRejected = expect(first).rejects.toBe(failure);
+    const secondRejected = expect(second).rejects.toBe(failure);
 
-    await expect(first).rejects.toBe(failure);
-    await expect(second).rejects.toBe(failure);
-    expect(insert).toHaveBeenCalledOnce();
+    firstInsert.reject(failure);
+
+    await Promise.all([firstRejected, secondRejected]);
+    await expect(later).resolves.toBe(2);
+    expect(insert).toHaveBeenCalledTimes(2);
+    expect(insert.mock.calls[0]?.[0].map((item) => item.message)).toEqual(['entry 1', 'entry 2']);
+    expect(insert.mock.calls[1]?.[0].map((item) => item.message)).toEqual(['entry 3', 'entry 4']);
   });
 
   it('rejects an entire request when the waiting buffer is full', async () => {
@@ -122,19 +144,34 @@ describe('IngestionCoordinator', () => {
     await expect(accepted).resolves.toBe(2);
   });
 
-  it('forces a partial batch to drain and rejects new work during shutdown', async () => {
-    const insert = vi.fn(async (entries: ValidLogEntry[]) => entries.length);
+  it('drains the active flush and one whole queued snapshot during shutdown', async () => {
+    const firstInsert = deferred<number>();
+    const insert = vi
+      .fn<(entries: ValidLogEntry[]) => Promise<number>>()
+      .mockReturnValueOnce(firstInsert.promise)
+      .mockImplementation(async (entries) => entries.length);
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 5_000,
-      flushBatchSize: 200,
+      flushBatchSize: 3,
       bufferMax: 10_000,
       insert,
     });
-    const pending = coordinator.enqueue([entry(1)]);
+    const first = coordinator.enqueue([entry(1), entry(2), entry(3)]);
+    const second = coordinator.enqueue([entry(4), entry(5)]);
+    const third = coordinator.enqueue([entry(6), entry(7)]);
+    const fourth = coordinator.enqueue([entry(8), entry(9)]);
 
-    await coordinator.stop();
+    const stopped = coordinator.stop();
+    await expect(coordinator.enqueue([entry(10)])).rejects.toBeInstanceOf(
+      IngestionUnavailableError,
+    );
+    firstInsert.resolve(3);
 
-    await expect(pending).resolves.toBe(1);
-    await expect(coordinator.enqueue([entry(2)])).rejects.toBeInstanceOf(IngestionUnavailableError);
+    await expect(stopped).resolves.toBeUndefined();
+    await expect(Promise.all([first, second, third, fourth])).resolves.toEqual([3, 2, 2, 2]);
+    expect(insert.mock.calls.map(([entries]) => entries.map((item) => item.message))).toEqual([
+      ['entry 1', 'entry 2', 'entry 3'],
+      ['entry 4', 'entry 5', 'entry 6', 'entry 7', 'entry 8', 'entry 9'],
+    ]);
   });
 });

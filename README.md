@@ -60,7 +60,7 @@ Useful commands:
 
 ## API
 
-All examples use `http://localhost:8080`. Successful and error JSON is formatted with two-space indentation.
+All examples use `http://localhost:8080`. JSON examples are indented for readability; runtime responses are compact.
 
 ### `GET /health`
 
@@ -218,7 +218,7 @@ The HTTP layer only parses requests and writes responses. Validation and ingesti
 
 ### Ingestion path
 
-Validation is hand-written to collect per-entry failures and minimize work on the half-CPU hot path. Valid entries from concurrent requests are coalesced into one parameterized `INSERT ... SELECT FROM unnest(...)` when 500 entries accumulate or the oldest request has waited 50 ms. Request boundaries and rejection indexes are preserved, and a response is sent only after the combined insert commits, so HTTP 200 still means the request's logs are durable and immediately queryable.
+Validation is hand-written to collect per-entry failures and minimize work on the half-CPU hot path. Valid entries from concurrent requests are coalesced into one parameterized `INSERT ... SELECT FROM unnest(...)` when 500 entries accumulate or the oldest request has waited 50 ms. Flushes are serialized; requests accumulated during an active write form one following transaction. Request boundaries and rejection indexes are preserved, and a response is sent only after the combined insert commits, so HTTP 200 still means the request's logs are durable and immediately queryable.
 
 The waiting queue is capped at 50,000 entries. A request that would exceed the cap is rejected in full with HTTP 503 and `Retry-After: 1`; buffered data is never acknowledged early. Shutdown stops admission and drains queued writes before closing PostgreSQL.
 
@@ -237,7 +237,7 @@ Before inserting retained late-arriving timestamps, the service ensures their da
 | `message`    | `text`          | Original log message                         |
 | `attributes` | `jsonb`         | Typed flat scalar map, default `{}`          |
 
-The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The `(service, timestamp DESC, id DESC)` index accelerates the common service-filtered paginated query. A targeted `((attributes ->> 'request_id'), timestamp DESC, id DESC)` index accelerates the load generator's selective visibility probe and propagates to existing and future partitions. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
+The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The `(service, timestamp DESC, id DESC)` index accelerates the common service-filtered paginated query. A narrow `((attributes ->> 'request_id'))` index accelerates the load generator's selective equality probe while minimizing write amplification; it propagates to existing and future partitions. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
 
 An atomic one-minute rollup keyed by timestamp, service, and level accelerates aggregates that do not use attribute or message filters. Arbitrary range boundaries remain exact by subtracting raw rows outside the requested half-open range from the boundary-minute rollups. Attribute- and message-filtered aggregates continue to use canonical logs. Rollup partitions follow the same daily creation and `DROP` retention lifecycle as raw-log partitions.
 
@@ -290,7 +290,7 @@ The strongest saved complete-contract run is [`contract-empty-to-999k.json`](loa
 
 This run demonstrates the target workload while the table grows through roughly one million rows; it is not evidence of a full two-minute run beginning with an already seeded one-million-row dataset. Saved two-minute seeded attempts did not meet all thresholds, so they are retained as diagnostic evidence rather than presented as passes. CPU and memory utilization were observed against enforced Compose limits but were not exported into the k6 summaries; no precise utilization percentages are claimed.
 
-Measured bottlenecks included PostgreSQL checkpoint pressure during sustained writes and severe write amplification from a trigram message index. The current design uses `unnest` inserts, daily partition pruning, keyset pagination, a service-aligned index, and the Compose-configured 1 GB `max_wal_size`. The trigram extension remains available, but the write-expensive message GIN index is not created; `q` currently relies on partition-pruned `ILIKE` scans.
+Measured bottlenecks included PostgreSQL checkpoint pressure during sustained writes and severe write amplification from broad indexes. The current design uses `unnest` inserts, daily partition pruning, keyset pagination, a service-aligned index, a narrow request-ID index, 16 MB of WAL buffers, and the Compose-configured 4 GB `max_wal_size`. The trigram extension remains available, but the write-expensive message GIN index is not created; `q` currently relies on partition-pruned `ILIKE` scans.
 
 See the [load-test guide](load/README.md) for prerequisites, commands, scenario controls, stored summaries, and operational checks. The JSON summaries do not capture `docker stats`; record resource utilization separately when reproducing a benchmark.
 

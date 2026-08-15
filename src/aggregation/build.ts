@@ -29,6 +29,8 @@ const GROUP_COLUMNS: Record<AggregateGroupBy, string> = {
   level: 'level',
 };
 
+const MINUTE_MS = 60_000;
+
 export function buildAggregateQuery(aggregate: AggregateQuery): BuiltQuery {
   const filters = buildFilterWhere(aggregate);
   const intervalPlaceholder = `$${filters.nextPlaceholder}`;
@@ -57,7 +59,9 @@ export function canUseRollups(aggregate: AggregateQuery): boolean {
 }
 
 export function buildRollupAggregateQuery(aggregate: AggregateQuery): BuiltQuery {
-  const params: unknown[] = [aggregate.since, aggregate.until];
+  const rollupStart = new Date(Math.floor(aggregate.since.getTime() / MINUTE_MS) * MINUTE_MS);
+  const rollupEnd = new Date(Math.ceil(aggregate.until.getTime() / MINUTE_MS) * MINUTE_MS);
+  const params: unknown[] = [aggregate.since, aggregate.until, rollupStart, rollupEnd];
   const rawFilters: string[] = [];
   const rollupFilters: string[] = [];
 
@@ -82,36 +86,25 @@ export function buildRollupAggregateQuery(aggregate: AggregateQuery): BuiltQuery
     rollupFilters.length > 0 ? `\n    AND ${rollupFilters.join('\n    AND ')}` : '';
 
   const text = `
-WITH bounds AS (
-  SELECT
-    date_trunc('minute', $1::timestamptz) AS rollup_start,
-    CASE
-      WHEN $2::timestamptz = date_trunc('minute', $2::timestamptz)
-        THEN $2::timestamptz
-      ELSE date_trunc('minute', $2::timestamptz) + interval '1 minute'
-    END AS rollup_end
-), source AS (
+WITH source AS (
   SELECT r.bucket_start AS event_timestamp, r.service, r.level, r.count
   FROM log_rollups_1m r
-  CROSS JOIN bounds b
-  WHERE r.bucket_start >= b.rollup_start
-    AND r.bucket_start < b.rollup_end${rollupSuffix}
+  WHERE r.bucket_start >= $3
+    AND r.bucket_start < $4${rollupSuffix}
 
   UNION ALL
 
   SELECT l."timestamp" AS event_timestamp, l.service, l.level, -1::bigint AS count
   FROM logs l
-  CROSS JOIN bounds b
-  WHERE l."timestamp" >= b.rollup_start
+  WHERE l."timestamp" >= $3
     AND l."timestamp" < $1${rawSuffix}
 
   UNION ALL
 
   SELECT l."timestamp" AS event_timestamp, l.service, l.level, -1::bigint AS count
   FROM logs l
-  CROSS JOIN bounds b
   WHERE l."timestamp" >= $2
-    AND l."timestamp" < b.rollup_end${rawSuffix}
+    AND l."timestamp" < $4${rawSuffix}
 )
 SELECT
   date_bin(${intervalPlaceholder}::interval, event_timestamp, '1970-01-01T00:00:00Z'::timestamptz) AS start,

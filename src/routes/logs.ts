@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { validateBatch } from '../ingestion/validate.js';
-import { ValidationError } from '../ingestion/errors.js';
 import { getIngestionCoordinator } from '../ingestion/coordinator.js';
 import { parseLogsQuery } from '../query/parse.js';
 import { queryLogs } from '../query/index.js';
@@ -13,7 +12,8 @@ export function createLogsRouter(): Router {
   router.post('/logs', async (req, res) => {
     const { valid, rejected } = validateBatch(req.body);
     if (valid.length === 0) {
-      throw new ValidationError('all entries rejected');
+      res.status(400).json({ accepted: 0, rejected });
+      return;
     }
     const accepted = await getIngestionCoordinator().enqueue(valid);
     res.status(200).json({ accepted, rejected });

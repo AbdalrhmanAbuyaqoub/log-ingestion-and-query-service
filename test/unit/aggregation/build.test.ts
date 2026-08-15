@@ -97,15 +97,38 @@ describe('buildRollupAggregateQuery', () => {
 
     expect(built.text).toContain('FROM log_rollups_1m r');
     expect(built.text).toContain('FROM logs l');
-    expect(built.text).toContain('r.bucket_start >= b.rollup_start');
+    expect(built.text).toContain('r.bucket_start >= $3');
+    expect(built.text).toContain('r.bucket_start < $4');
+    expect(built.text).toContain('l."timestamp" >= $3');
     expect(built.text).toContain('l."timestamp" < $1');
     expect(built.text).toContain('l."timestamp" >= $2');
+    expect(built.text).toContain('l."timestamp" < $4');
+    expect(built.text).not.toContain('CROSS JOIN bounds');
     expect(built.text).toContain('-1::bigint AS count');
     expect(built.text).toContain('HAVING SUM(count) > 0');
-    expect(built.text).toContain('r.service = $3');
-    expect(built.text).toContain('l.level = $4');
-    expect(built.text).toContain('date_bin($5::interval');
-    expect(built.params).toEqual([input.since, input.until, 'checkout', 'error', '1 minute']);
+    expect(built.text).toContain('r.service = $5');
+    expect(built.text).toContain('l.level = $6');
+    expect(built.text).toContain('date_bin($7::interval');
+    expect(built.params).toEqual([
+      input.since,
+      input.until,
+      new Date('2026-08-10T10:00:00Z'),
+      new Date('2026-08-10T11:01:00Z'),
+      'checkout',
+      'error',
+      '1 minute',
+    ]);
+
+    const aligned = buildRollupAggregateQuery(
+      aggregate({
+        since: new Date('2026-08-10T10:00:00Z'),
+        until: new Date('2026-08-10T11:00:00Z'),
+      }),
+    );
+    expect(aligned.params.slice(2, 4)).toEqual([
+      new Date('2026-08-10T10:00:00Z'),
+      new Date('2026-08-10T11:00:00Z'),
+    ]);
   });
 
   it('falls back to raw aggregation for attribute or message filters', () => {

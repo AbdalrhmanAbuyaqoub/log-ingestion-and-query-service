@@ -38,7 +38,7 @@ describe('required API endpoints', () => {
   }, 120_000);
 
   beforeEach(async () => {
-    await client.query('TRUNCATE TABLE logs');
+    await client.query('TRUNCATE TABLE logs, log_rollups_1m');
     await client.query('ALTER SEQUENCE logs_id_seq RESTART WITH 1');
   });
 
@@ -161,6 +161,27 @@ describe('required API endpoints', () => {
     }
     const persisted = await client.query<{ count: string }>('SELECT count(*) FROM logs');
     expect(persisted.rows[0]?.count).toBe('8');
+  });
+
+  it('returns every rejection when all entries are invalid', async () => {
+    const response = await request(app)
+      .post('/logs')
+      .send({ logs: [logEntry({ level: 'critical' }), logEntry({ message: '' })] });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      accepted: 0,
+      rejected: [
+        { index: 0, reason: "invalid level: 'critical'" },
+        { index: 1, reason: 'message must be a non-empty string' },
+      ],
+    });
+    const persisted = await client.query<{ raw: string; rollup: string }>(`
+      SELECT
+        (SELECT count(*) FROM logs)::text AS raw,
+        (SELECT count(*) FROM log_rollups_1m)::text AS rollup
+    `);
+    expect(persisted.rows[0]).toEqual({ raw: '0', rollup: '0' });
   });
 
   it('orders equal timestamps by numeric bigint id across cursor pages', async () => {

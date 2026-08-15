@@ -10,7 +10,7 @@ function encoded(value: unknown): string {
 describe('query cursor', () => {
   it('round-trips a timestamp and bigint id without precision loss', () => {
     const timestamp = new Date('2026-07-20T14:32:01.123Z');
-    const id = '9007199254740993';
+    const id = '9223372036854775807';
 
     expect(decodeCursor(encodeCursor(timestamp, id))).toEqual({
       t: timestamp.toISOString(),
@@ -65,6 +65,7 @@ describe('query cursor', () => {
       encoded({ t: '2026-07-20T14:32:01.123Z', id: '-1' }),
       encoded({ t: '2026-07-20T14:32:01.123Z', id: '1.5' }),
       encoded({ t: '2026-07-20T14:32:01.123Z', id: 'abc' }),
+      encoded({ t: '2026-07-20T14:32:01.123Z', id: '9223372036854775808' }),
     ];
 
     for (const cursor of malformed) {

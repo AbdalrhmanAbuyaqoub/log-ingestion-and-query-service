@@ -5,6 +5,7 @@ import { parseIsoTimestamp } from '../timestamp.js';
 export type CursorPayload = { t: string; id: string };
 
 const ID_RE = /^\d+$/;
+const PG_BIGINT_MAX = 9_223_372_036_854_775_807n;
 
 export function encodeCursor(t: Date, id: string): string {
   const payload: CursorPayload = { t: t.toISOString(), id };
@@ -37,6 +38,7 @@ export function decodeCursor(raw: string): CursorPayload {
   }
   if (!parseIsoTimestamp(o.t)) throw new ValidationError('malformed cursor');
   if (!ID_RE.test(o.id)) throw new ValidationError('malformed cursor');
+  if (BigInt(o.id) > PG_BIGINT_MAX) throw new ValidationError('malformed cursor');
 
   return { t: o.t, id: o.id };
 }

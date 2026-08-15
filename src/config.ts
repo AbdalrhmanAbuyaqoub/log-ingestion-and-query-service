@@ -4,6 +4,7 @@ export type Config = {
   RETENTION_DAYS: number;
   INGEST_FLUSH_INTERVAL_MS: number;
   INGEST_FLUSH_BATCH_SIZE: number;
+  INGEST_FLUSH_MAX_ENTRIES: number;
   INGEST_BUFFER_MAX: number;
 };
 
@@ -52,9 +53,21 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const INGEST_FLUSH_BATCH_SIZE = parsePositiveInt(
     env.INGEST_FLUSH_BATCH_SIZE,
     'INGEST_FLUSH_BATCH_SIZE',
-    500,
+    750,
+  );
+  const INGEST_FLUSH_MAX_ENTRIES = parsePositiveInt(
+    env.INGEST_FLUSH_MAX_ENTRIES,
+    'INGEST_FLUSH_MAX_ENTRIES',
+    8_000,
   );
   const INGEST_BUFFER_MAX = parsePositiveInt(env.INGEST_BUFFER_MAX, 'INGEST_BUFFER_MAX', 50_000);
+
+  if (INGEST_FLUSH_BATCH_SIZE > INGEST_FLUSH_MAX_ENTRIES) {
+    throw new Error('config: INGEST_FLUSH_BATCH_SIZE must not exceed INGEST_FLUSH_MAX_ENTRIES');
+  }
+  if (INGEST_FLUSH_MAX_ENTRIES > INGEST_BUFFER_MAX) {
+    throw new Error('config: INGEST_FLUSH_MAX_ENTRIES must not exceed INGEST_BUFFER_MAX');
+  }
 
   return {
     PORT,
@@ -62,6 +75,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     RETENTION_DAYS,
     INGEST_FLUSH_INTERVAL_MS,
     INGEST_FLUSH_BATCH_SIZE,
+    INGEST_FLUSH_MAX_ENTRIES,
     INGEST_BUFFER_MAX,
   };
 }

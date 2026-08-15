@@ -26,7 +26,7 @@ export type MaintenanceResult = {
 };
 
 export function utcDayStart(value: Date): Date {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  return new Date(utcDayStartMs(value));
 }
 
 export function partitionName(day: Date): string {
@@ -38,8 +38,12 @@ export function partitionName(day: Date): string {
 }
 
 export function isDayRetained(day: Date, now: Date, retentionDays: number): boolean {
-  const upperBound = utcDayStart(day).getTime() + DAY_MS;
+  const upperBound = utcDayStartMs(day) + DAY_MS;
   return upperBound > now.getTime() - retentionDays * DAY_MS;
+}
+
+function utcDayStartMs(value: Date): number {
+  return Math.floor(value.getTime() / DAY_MS) * DAY_MS;
 }
 
 function quoteIdentifier(identifier: string): string {
@@ -117,10 +121,13 @@ export async function ensurePartitionsForTimestamps(
   retentionDays: number,
   now: Date = new Date(),
 ): Promise<number> {
-  const days = new Map<string, Date>();
+  const cutoff = now.getTime() - retentionDays * DAY_MS;
+  const days = new Map<number, Date>();
   for (const timestamp of timestamps) {
-    const day = utcDayStart(timestamp);
-    if (isDayRetained(day, now, retentionDays)) days.set(partitionName(day), day);
+    const dayStart = utcDayStartMs(timestamp);
+    if (dayStart + DAY_MS > cutoff && !days.has(dayStart)) {
+      days.set(dayStart, new Date(dayStart));
+    }
   }
   if (days.size === 0) return 0;
 

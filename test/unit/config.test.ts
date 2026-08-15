@@ -7,7 +7,8 @@ describe('loadConfig', () => {
     expect(config.PORT).toBe(8080);
     expect(config.RETENTION_DAYS).toBe(30);
     expect(config.INGEST_FLUSH_INTERVAL_MS).toBe(50);
-    expect(config.INGEST_FLUSH_BATCH_SIZE).toBe(500);
+    expect(config.INGEST_FLUSH_BATCH_SIZE).toBe(750);
+    expect(config.INGEST_FLUSH_MAX_ENTRIES).toBe(8_000);
     expect(config.INGEST_BUFFER_MAX).toBe(50_000);
   });
 
@@ -18,12 +19,14 @@ describe('loadConfig', () => {
       RETENTION_DAYS: '7',
       INGEST_FLUSH_INTERVAL_MS: '25',
       INGEST_FLUSH_BATCH_SIZE: '300',
+      INGEST_FLUSH_MAX_ENTRIES: '4000',
       INGEST_BUFFER_MAX: '9000',
     });
     expect(config.PORT).toBe(9090);
     expect(config.RETENTION_DAYS).toBe(7);
     expect(config.INGEST_FLUSH_INTERVAL_MS).toBe(25);
     expect(config.INGEST_FLUSH_BATCH_SIZE).toBe(300);
+    expect(config.INGEST_FLUSH_MAX_ENTRIES).toBe(4000);
     expect(config.INGEST_BUFFER_MAX).toBe(9000);
   });
 
@@ -44,14 +47,23 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ DATABASE_URL: 'x', RETENTION_DAYS: '0' })).toThrow();
   });
 
-  it.each(['INGEST_FLUSH_INTERVAL_MS', 'INGEST_FLUSH_BATCH_SIZE', 'INGEST_BUFFER_MAX'])(
-    'rejects invalid %s values',
-    (name) => {
-      expect(() => loadConfig({ DATABASE_URL: 'x', [name]: '0' })).toThrow();
-      expect(() => loadConfig({ DATABASE_URL: 'x', [name]: '1.5' })).toThrow();
-      expect(() => loadConfig({ DATABASE_URL: 'x', [name]: 'nope' })).toThrow();
-    },
-  );
+  it.each([
+    'INGEST_FLUSH_INTERVAL_MS',
+    'INGEST_FLUSH_BATCH_SIZE',
+    'INGEST_FLUSH_MAX_ENTRIES',
+    'INGEST_BUFFER_MAX',
+  ])('rejects invalid %s values', (name) => {
+    expect(() => loadConfig({ DATABASE_URL: 'x', [name]: '0' })).toThrow();
+    expect(() => loadConfig({ DATABASE_URL: 'x', [name]: '1.5' })).toThrow();
+    expect(() => loadConfig({ DATABASE_URL: 'x', [name]: 'nope' })).toThrow();
+  });
+
+  it.each([
+    [{ INGEST_FLUSH_BATCH_SIZE: '9000', INGEST_FLUSH_MAX_ENTRIES: '8000' }, /FLUSH_BATCH_SIZE/],
+    [{ INGEST_FLUSH_MAX_ENTRIES: '51000', INGEST_BUFFER_MAX: '50000' }, /FLUSH_MAX_ENTRIES/],
+  ])('rejects inconsistent ingestion limits', (limits, message) => {
+    expect(() => loadConfig({ DATABASE_URL: 'x', ...limits })).toThrow(message);
+  });
 });
 
 describe('loadRetentionDays', () => {

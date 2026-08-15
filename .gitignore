@@ -10,3 +10,4 @@ load/
 docs/
 test/integration/database.test.ts
 /scripts/
+/benchmark

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 vi.mock('../../../src/db/index.js', () => ({
-  query: vi.fn(),
+  ingestQuery: vi.fn(),
   getClient: vi.fn(),
   close: vi.fn(),
 }));
@@ -10,7 +10,7 @@ vi.mock('../../../src/retention/partition-manager.js', () => ({
 }));
 
 import { insertLogs } from '../../../src/ingestion/insert.js';
-import { query } from '../../../src/db/index.js';
+import { ingestQuery } from '../../../src/db/index.js';
 import type { ValidLogEntry } from '../../../src/ingestion/types.js';
 import { ensurePartitionsForTimestamps } from '../../../src/retention/partition-manager.js';
 
@@ -27,29 +27,30 @@ function entry(overrides: Partial<ValidLogEntry> = {}): ValidLogEntry {
 
 describe('insertLogs', () => {
   beforeEach(() => {
-    vi.mocked(query).mockReset();
+    vi.mocked(ingestQuery).mockReset();
     vi.mocked(ensurePartitionsForTimestamps).mockClear();
   });
 
   it('returns 0 and issues no query when entries is empty', async () => {
     const n = await insertLogs([]);
     expect(n).toBe(0);
-    expect(vi.mocked(query)).not.toHaveBeenCalled();
+    expect(vi.mocked(ingestQuery)).not.toHaveBeenCalled();
   });
 
   it('issues one INSERT via unnest with five arrays', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [{ accepted: '2' }], rowCount: 1 } as never);
+    vi.mocked(ingestQuery).mockResolvedValue({ rows: [], rowCount: 2 } as never);
     const entries = [entry(), entry({ level: 'info' })];
 
     await insertLogs(entries);
 
     expect(vi.mocked(ensurePartitionsForTimestamps)).toHaveBeenCalledOnce();
-    expect(vi.mocked(query)).toHaveBeenCalledTimes(1);
-    const [text, values] = vi.mocked(query).mock.calls[0]!;
+    expect(vi.mocked(ingestQuery)).toHaveBeenCalledTimes(1);
+    const [text, values] = vi.mocked(ingestQuery).mock.calls[0]!;
     expect(text).toMatch(/INSERT INTO logs/);
     expect(text).toMatch(/unnest/);
     expect(text).toMatch(/INSERT INTO log_rollups_1m/);
     expect(text).toMatch(/ON CONFLICT/);
+    expect(text).not.toMatch(/SELECT COUNT\(\*\)::text AS accepted/);
     expect(text).toMatch(/\$1::timestamptz\[\]/);
     expect(text).toMatch(/\$5::jsonb\[\]/);
     expect(values).toHaveLength(5);
@@ -61,21 +62,14 @@ describe('insertLogs', () => {
     expect(params[4]).toEqual(['{"retries":3}', '{"retries":3}']);
   });
 
-  it('returns rowCount when the driver reports it', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [{ accepted: '7' }], rowCount: 1 } as never);
+  it('returns the input count after the atomic statement succeeds', async () => {
+    vi.mocked(ingestQuery).mockResolvedValue({ rows: [], rowCount: 1 } as never);
     const n = await insertLogs(Array.from({ length: 7 }, () => entry()));
     expect(n).toBe(7);
   });
 
-  it('rejects an invalid accepted count', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [{ accepted: 'invalid' }] } as never);
-    await expect(insertLogs([entry(), entry(), entry()])).rejects.toThrow(
-      'database returned an invalid accepted count',
-    );
-  });
-
   it('propagates driver errors', async () => {
-    vi.mocked(query).mockRejectedValue(new Error('boom'));
+    vi.mocked(ingestQuery).mockRejectedValue(new Error('boom'));
     await expect(insertLogs([entry()])).rejects.toThrow('boom');
   });
 });

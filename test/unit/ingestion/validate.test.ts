@@ -21,6 +21,19 @@ describe('validateEntry', () => {
     expect(typeof out).toBe('object');
   });
 
+  it('supports fast and fallback ISO timestamp paths', () => {
+    for (const timestamp of [
+      '2026-08-03T09:59:00.123Z',
+      '2026-08-03T12:59:00+03:00',
+      '2026-08-03T09:59:00.1Z',
+    ]) {
+      expect(validateEntry({ ...validEntry(), timestamp }, NOW)).not.toEqual(expect.any(String));
+    }
+    expect(validateEntry({ ...validEntry(), timestamp: '2026-02-30T09:59:00.123Z' }, NOW)).toMatch(
+      /timestamp/,
+    );
+  });
+
   it('defaults missing attributes to {}', () => {
     const { attributes: _a, ...rest } = validEntry();
     void _a;
@@ -29,7 +42,8 @@ describe('validateEntry', () => {
   });
 
   it('preserves string / number / boolean attribute values', () => {
-    const out = validateEntry(validEntry(), NOW) as { attributes: Record<string, unknown> };
+    const input = validEntry();
+    const out = validateEntry(input, NOW) as { attributes: Record<string, unknown> };
     expect(out.attributes).toEqual({ user_id: '42', region: 'eu-west', retries: 3 });
   });
 

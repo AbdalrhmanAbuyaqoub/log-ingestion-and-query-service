@@ -1,10 +1,4 @@
-import {
-  LOG_LEVELS,
-  type AttrValue,
-  type Attributes,
-  type LogLevel,
-  type ValidLogEntry,
-} from './types.js';
+import type { AttrValue, Attributes, LogLevel, ValidLogEntry } from './types.js';
 import { ValidationError } from './errors.js';
 import { parseIsoTimestamp } from '../timestamp.js';
 
@@ -16,6 +10,27 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function isAttrValue(v: unknown): v is AttrValue {
   return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+}
+
+function isLogLevel(v: string): v is LogLevel {
+  return v === 'debug' || v === 'info' || v === 'warn' || v === 'error';
+}
+
+function isNonEmptyText(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length === 0) return false;
+  const first = v.charCodeAt(0);
+  const startsWithWhitespace =
+    first <= 32 ||
+    first === 160 ||
+    first === 5760 ||
+    (first >= 8192 && first <= 8202) ||
+    first === 8232 ||
+    first === 8233 ||
+    first === 8239 ||
+    first === 8287 ||
+    first === 12288 ||
+    first === 65279;
+  return !startsWithWhitespace || v.trim().length > 0;
 }
 
 /**
@@ -35,24 +50,24 @@ export function validateEntry(raw: unknown, now: number = Date.now()): ValidLogE
   if (tsMs > now + MAX_FUTURE_MS) return 'timestamp must not be more than 5 minutes in the future';
 
   const level = r['level'];
-  if (typeof level !== 'string' || !LOG_LEVELS.includes(level as LogLevel)) {
+  if (typeof level !== 'string' || !isLogLevel(level)) {
     return `invalid level: '${String(level)}'`;
   }
 
   const service = r['service'];
-  if (typeof service !== 'string' || service.trim().length === 0) {
+  if (!isNonEmptyText(service)) {
     return 'service must be a non-empty string';
   }
 
   const message = r['message'];
-  if (typeof message !== 'string' || message.trim().length === 0) {
+  if (!isNonEmptyText(message)) {
     return 'message must be a non-empty string';
   }
 
   if (!('attributes' in r)) {
     return {
       timestamp,
-      level: level as LogLevel,
+      level,
       service,
       message,
       attributes: {},
@@ -65,15 +80,21 @@ export function validateEntry(raw: unknown, now: number = Date.now()): ValidLogE
     return 'attributes must be a flat object with string, number, or boolean values';
   }
 
-  const attributes: Attributes = {};
-  for (const [key, value] of Object.entries(attrsRaw)) {
+  for (const key in attrsRaw) {
+    if (!Object.hasOwn(attrsRaw, key)) continue;
+    const value = attrsRaw[key];
     if (!isAttrValue(value)) {
       return 'attributes must be a flat object with string, number, or boolean values';
     }
-    attributes[key] = value;
   }
 
-  return { timestamp, level: level as LogLevel, service, message, attributes };
+  return {
+    timestamp,
+    level,
+    service,
+    message,
+    attributes: attrsRaw as Attributes,
+  };
 }
 
 /**

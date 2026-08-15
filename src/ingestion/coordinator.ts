@@ -13,6 +13,7 @@ type PendingRequest = {
 export type IngestionCoordinatorOptions = {
   flushIntervalMs: number;
   flushBatchSize: number;
+  flushMaxEntries: number;
   bufferMax: number;
   insert?: (entries: ValidLogEntry[]) => Promise<number>;
   now?: () => number;
@@ -21,6 +22,7 @@ export type IngestionCoordinatorOptions = {
 export class IngestionCoordinator {
   private readonly flushIntervalMs: number;
   private readonly flushBatchSize: number;
+  private readonly flushMaxEntries: number;
   private readonly bufferMax: number;
   private readonly insert: (entries: ValidLogEntry[]) => Promise<number>;
   private readonly now: () => number;
@@ -34,6 +36,7 @@ export class IngestionCoordinator {
   constructor(options: IngestionCoordinatorOptions) {
     this.flushIntervalMs = options.flushIntervalMs;
     this.flushBatchSize = options.flushBatchSize;
+    this.flushMaxEntries = options.flushMaxEntries;
     this.bufferMax = options.bufferMax;
     this.insert = options.insert ?? insertLogs;
     this.now = options.now ?? Date.now;
@@ -95,11 +98,15 @@ export class IngestionCoordinator {
     }
 
     this.clearTimer();
-    const requests = this.queue;
-    this.queue = [];
-    this.waitingEntries = 0;
+    const requests = this.takeNextFlush();
     this.activeRequests = requests;
-    const entries = requests.flatMap((request) => request.entries);
+    let entryCount = 0;
+    for (const request of requests) entryCount += request.entries.length;
+    const entries = new Array<ValidLogEntry>(entryCount);
+    let entryIndex = 0;
+    for (const request of requests) {
+      for (const entry of request.entries) entries[entryIndex++] = entry;
+    }
 
     this.active = this.insert(entries)
       .then((accepted) => {
@@ -120,6 +127,18 @@ export class IngestionCoordinator {
         }
       });
     return this.active;
+  }
+
+  private takeNextFlush(): PendingRequest[] {
+    let requestCount = 0;
+    let entryCount = 0;
+    while (requestCount < this.queue.length && entryCount < this.flushMaxEntries) {
+      entryCount += this.queue[requestCount]!.entries.length;
+      requestCount++;
+    }
+    const requests = this.queue.splice(0, requestCount);
+    this.waitingEntries -= entryCount;
+    return requests;
   }
 
   private scheduleTimer(): void {
@@ -154,6 +173,7 @@ export function getIngestionCoordinator(): IngestionCoordinator {
     coordinator = new IngestionCoordinator({
       flushIntervalMs: config.INGEST_FLUSH_INTERVAL_MS,
       flushBatchSize: config.INGEST_FLUSH_BATCH_SIZE,
+      flushMaxEntries: config.INGEST_FLUSH_MAX_ENTRIES,
       bufferMax: config.INGEST_BUFFER_MAX,
     });
   }

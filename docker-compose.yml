@@ -21,7 +21,7 @@ services:
       - -c
       - max_wal_size=4GB
       - -c
-      - wal_buffers=16MB
+      - wal_buffers=64MB
     volumes:
       - pgdata:/var/lib/postgresql
     healthcheck:
@@ -45,7 +45,8 @@ services:
       DATABASE_URL: postgres://logs:logs@db:5432/logs
       RETENTION_DAYS: '30'
       INGEST_FLUSH_INTERVAL_MS: '50'
-      INGEST_FLUSH_BATCH_SIZE: '500'
+      INGEST_FLUSH_BATCH_SIZE: '750'
+      INGEST_FLUSH_MAX_ENTRIES: '8000'
       INGEST_BUFFER_MAX: '50000'
     depends_on:
       db:

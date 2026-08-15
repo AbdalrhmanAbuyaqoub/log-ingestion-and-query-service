@@ -21,7 +21,7 @@ export default tseslint.config(
   {
     // k6 load-test scripts: declare k6's injected globals so eslint doesn't
     // flag them as undefined. These are read-only runtime values provided by k6.
-    files: ['load/**/*.js'],
+    files: ['load/**/*.js', 'benchmark/**/*.js'],
     languageOptions: {
       globals: {
         __ENV: 'readonly',

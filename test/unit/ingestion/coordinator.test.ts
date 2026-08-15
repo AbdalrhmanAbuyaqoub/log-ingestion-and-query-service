@@ -34,6 +34,7 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 50,
       flushBatchSize: 3,
+      flushMaxEntries: 10,
       bufferMax: 10,
       insert,
     });
@@ -52,6 +53,7 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 50,
       flushBatchSize: 200,
+      flushMaxEntries: 8_000,
       bufferMax: 10_000,
       insert,
       now: () => Date.now(),
@@ -75,6 +77,7 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 50,
       flushBatchSize: 3,
+      flushMaxEntries: 20,
       bufferMax: 20,
       insert,
     });
@@ -110,6 +113,7 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 50,
       flushBatchSize: 2,
+      flushMaxEntries: 20,
       bufferMax: 20,
       insert,
     });
@@ -134,6 +138,7 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 50,
       flushBatchSize: 10,
+      flushMaxEntries: 10,
       bufferMax: 2,
       insert,
     });
@@ -153,6 +158,7 @@ describe('IngestionCoordinator', () => {
     const coordinator = new IngestionCoordinator({
       flushIntervalMs: 5_000,
       flushBatchSize: 3,
+      flushMaxEntries: 10_000,
       bufferMax: 10_000,
       insert,
     });
@@ -172,6 +178,36 @@ describe('IngestionCoordinator', () => {
     expect(insert.mock.calls.map(([entries]) => entries.map((item) => item.message))).toEqual([
       ['entry 1', 'entry 2', 'entry 3'],
       ['entry 4', 'entry 5', 'entry 6', 'entry 7', 'entry 8', 'entry 9'],
+    ]);
+  });
+
+  it('bounds FIFO flushes without splitting requests', async () => {
+    const firstInsert = deferred<number>();
+    const insert = vi
+      .fn<(entries: ValidLogEntry[]) => Promise<number>>()
+      .mockReturnValueOnce(firstInsert.promise)
+      .mockImplementation(async (entries) => entries.length);
+    const coordinator = new IngestionCoordinator({
+      flushIntervalMs: 50,
+      flushBatchSize: 2,
+      flushMaxEntries: 5,
+      bufferMax: 30,
+      insert,
+    });
+
+    const active = coordinator.enqueue([entry(1), entry(2)]);
+    const firstQueued = coordinator.enqueue([entry(3), entry(4), entry(5)]);
+    const secondQueued = coordinator.enqueue([entry(6), entry(7), entry(8)]);
+    const thirdQueued = coordinator.enqueue([entry(9), entry(10), entry(11)]);
+    firstInsert.resolve(2);
+
+    await expect(Promise.all([active, firstQueued, secondQueued, thirdQueued])).resolves.toEqual([
+      2, 3, 3, 3,
+    ]);
+    expect(insert.mock.calls.map(([entries]) => entries.map((item) => item.message))).toEqual([
+      ['entry 1', 'entry 2'],
+      ['entry 3', 'entry 4', 'entry 5', 'entry 6', 'entry 7', 'entry 8'],
+      ['entry 9', 'entry 10', 'entry 11'],
     ]);
   });
 });

@@ -44,7 +44,7 @@ describe('partition operations', () => {
     expect(getClient).not.toHaveBeenCalled();
   });
 
-  it('avoids the advisory lock when all distinct event days already exist', async () => {
+  it('deduplicates same-day checks and avoids the advisory lock when partitions exist', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [{ exists: true }] });
     const release = vi.fn();
     vi.mocked(getClient).mockResolvedValue({ query, release } as never);

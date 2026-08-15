@@ -147,6 +147,7 @@ describe('required API endpoints', () => {
               logEntry({
                 timestamp: `2026-08-10T10:00:${String(requestIndex).padStart(2, '0')}Z`,
                 message: `request ${requestIndex}`,
+                attributes: { request_id: `integration-${requestIndex}` },
               }),
               logEntry({ level: 'invalid' }),
             ],
@@ -161,6 +162,12 @@ describe('required API endpoints', () => {
     }
     const persisted = await client.query<{ count: string }>('SELECT count(*) FROM logs');
     expect(persisted.rows[0]?.count).toBe('8');
+
+    const visibility = await request(app)
+      .get('/logs')
+      .query({ 'attr.request_id': 'integration-0', q: 'request 0', limit: 1 });
+    expect(visibility.status).toBe(200);
+    expect(visibility.body.logs[0]?.attributes.request_id).toBe('integration-0');
   });
 
   it('returns every rejection when all entries are invalid', async () => {

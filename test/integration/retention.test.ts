@@ -47,6 +47,11 @@ describe('partition management and retention', () => {
       'utf8',
     );
     await verificationPool.query(narrowRequestIdMigration);
+    const narrowServiceIndexMigration = await readFile(
+      new URL('../../migrations/006_narrow_service_index.sql', import.meta.url),
+      'utf8',
+    );
+    await verificationPool.query(narrowServiceIndexMigration);
 
     ({ runPartitionMaintenance } = await import('../../src/retention/partition-manager.js'));
     ({ close: closeServicePool } = await import('../../src/db/index.js'));
@@ -141,6 +146,17 @@ describe('partition management and retention', () => {
       expect(index.definition).not.toContain('timestamp DESC');
       expect(index.definition).not.toContain('id DESC');
     }
+
+    const serviceIndexes = await verificationPool.query<{ count: number }>(`
+      SELECT count(*)::int AS count
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND (indexname = 'logs_service_ts_idx' OR indexname LIKE '%service_timestamp_idx')
+        AND tablename IN ('logs', 'logs_p2026_08_11', 'logs_p2026_08_14')
+        AND indexdef LIKE '%(service, "timestamp" DESC)%'
+        AND indexdef NOT LIKE '%id DESC%'
+    `);
+    expect(serviceIndexes.rows[0]?.count).toBe(3);
 
     const sequence = await verificationPool.query<{ cache_size: string }>(`
       SELECT cache_size::text

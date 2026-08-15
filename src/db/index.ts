@@ -12,7 +12,12 @@ const config = loadConfig();
 
 const pool = new pg.Pool({
   connectionString: config.DATABASE_URL,
-  max: 10,
+  max: 9,
+});
+
+const ingestPool = new pg.Pool({
+  connectionString: config.DATABASE_URL,
+  max: 1,
 });
 
 const LOG_QUERIES = process.env.LOG_QUERIES === '1'; // to-do: check
@@ -44,10 +49,21 @@ export const query = async <T extends pg.QueryResultRow = pg.QueryResultRow>(
  */
 export const getClient = (): Promise<pg.PoolClient> => pool.connect();
 
+export const initializeIngestPool = async (): Promise<void> => {
+  await ingestPool.query('SELECT 1');
+};
+
+export const ingestQuery = async (text: string, params: unknown[]): Promise<pg.QueryResult> =>
+  ingestPool.query({
+    name: 'insert-logs-with-rollups-v1',
+    text,
+    values: params,
+  });
+
 /**
  * Drain the pool — called during graceful shutdown. Rejects if a client cannot
  * be closed; callers should still proceed with process exit.
  */
 export const close = async (): Promise<void> => {
-  await pool.end();
+  await Promise.all([pool.end(), ingestPool.end()]);
 };

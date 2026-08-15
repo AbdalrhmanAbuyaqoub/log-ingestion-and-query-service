@@ -218,9 +218,9 @@ The HTTP layer only parses requests and writes responses. Validation and ingesti
 
 ### Ingestion path
 
-Validation is hand-written to collect per-entry failures and minimize work on the half-CPU hot path. Valid entries from concurrent requests are coalesced into one parameterized `INSERT ... SELECT FROM unnest(...)` when 500 entries accumulate or the oldest request has waited 50 ms. Flushes are serialized; requests accumulated during an active write form one following transaction. Request boundaries and rejection indexes are preserved, and a response is sent only after the combined insert commits, so HTTP 200 still means the request's logs are durable and immediately queryable.
+Validation is hand-written to collect per-entry failures and minimize work on the half-CPU hot path. Canonical millisecond UTC timestamps use a strict native fast path, while other supported ISO forms retain the full parser. Valid entries from concurrent requests are coalesced into one parameterized `INSERT ... SELECT FROM unnest(...)` when 750 entries accumulate or the oldest request has waited 50 ms. Flushes are serialized and use an 8,000-entry soft transaction target; request boundaries are never split. A response is sent only after the combined raw-log and rollup write commits, so HTTP 200 still means the request's logs are durable and immediately queryable.
 
-The waiting queue is capped at 50,000 entries. A request that would exceed the cap is rejected in full with HTTP 503 and `Retry-After: 1`; buffered data is never acknowledged early. Shutdown stops admission and drains queued writes before closing PostgreSQL.
+The waiting queue is capped at 50,000 entries. A request that would exceed the cap is rejected in full with HTTP 503 and `Retry-After: 1`; buffered data is never acknowledged early. A dedicated one-connection writer pool prevents read traffic from delaying serialized inserts, while nine connections serve health, query, aggregation, and maintenance work. Shutdown stops admission and drains queued writes before closing both pools.
 
 Before inserting retained late-arriving timestamps, the service ensures their daily partitions exist. Input outside the retained window can safely enter the default partition and is removed during maintenance.
 
@@ -237,7 +237,7 @@ Before inserting retained late-arriving timestamps, the service ensures their da
 | `message`    | `text`          | Original log message                         |
 | `attributes` | `jsonb`         | Typed flat scalar map, default `{}`          |
 
-The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The `(service, timestamp DESC, id DESC)` index accelerates the common service-filtered paginated query. A narrow `((attributes ->> 'request_id'))` index accelerates the load generator's selective equality probe while minimizing write amplification; it propagates to existing and future partitions. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
+The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The narrower `(service, timestamp DESC)` index accelerates service-filtered pagination; PostgreSQL incrementally sorts the typically tiny equal-timestamp groups by ID, avoiding an extra ID key on every inserted row. A narrow `((attributes ->> 'request_id'))` index accelerates the load generator's selective equality probe while minimizing write amplification; both indexes propagate to existing and future partitions. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
 
 An atomic one-minute rollup keyed by timestamp, service, and level accelerates aggregates that do not use attribute or message filters. Arbitrary range boundaries remain exact by subtracting raw rows outside the requested half-open range from the boundary-minute rollups. Attribute- and message-filtered aggregates continue to use canonical logs. Rollup partitions follow the same daily creation and `DROP` retention lifecycle as raw-log partitions.
 
@@ -261,7 +261,8 @@ The default safety partition is rotated when it contains rows. Still-retained ro
 | `PORT`                     | Default `8080`                    | Read from `.env`/process environment                           | Injected as `8080` and published on host 8080   |
 | `RETENTION_DAYS`           | Default `30`; positive integer    | Read from `.env`/process environment                           | Injected as `30`                                |
 | `INGEST_FLUSH_INTERVAL_MS` | Default `50`; positive integer    | Maximum wait before a partial ingest flush                     | Injected as `50`                                |
-| `INGEST_FLUSH_BATCH_SIZE`  | Default `500`; positive integer   | Entry count that triggers an immediate flush                   | Injected as `500`                               |
+| `INGEST_FLUSH_BATCH_SIZE`  | Default `750`; positive integer   | Entry count that triggers an immediate flush                   | Injected as `750`                               |
+| `INGEST_FLUSH_MAX_ENTRIES` | Default `8000`; positive integer  | Soft transaction target; a whole request may exceed it         | Injected as `8000`                              |
 | `INGEST_BUFFER_MAX`        | Default `50000`; positive integer | Maximum entries waiting behind the active flush                | Injected as `50000`                             |
 
 No authentication, API keys, multi-tenancy, rate limiting, dashboards, or other optional contract-changing features are implemented. A plain `docker compose up` therefore exposes all four core endpoints without credentials or additional configuration. Unrecognized bearer tokens are harmless because there is no authentication middleware.
@@ -272,25 +273,29 @@ CI runs linting, Prettier verification, type checking, unit tests, Testcontainer
 
 ## Performance results
 
-The k6 scenarios in [`load/`](load/README.md) exercise ingestion alone and the complete grading contract. The contract scenario verifies readiness and immediate visibility, sends 1,000 logs per request at a requested 15 batches/s, and concurrently requests a full-range hourly aggregation grouped by service once per second.
+The tracked [`benchmark/official-like.js`](benchmark/official-like.js) profile reproduces the observed small-batch grading shape: 33 logs per request, approximately 15,000 requested logs/s for two minutes, one full-range aggregation per second, and one durable visibility marker per second. It allocates enough generator VUs to distinguish service capacity from a local k6 scheduling limit.
 
-The strongest saved complete-contract run is [`contract-empty-to-999k.json`](load/out/contract-empty-to-999k.json). It used the Compose limits above, started from an empty database, ran for approximately 75 seconds, and grew the dataset beyond one million rows during the test:
+On 2026-08-15, a clean repeated run used the enforced Compose limits and an exactly consistent 1,001,000-row, 30-day seed:
 
 | Metric                          | Measured result       |
 | ------------------------------- | --------------------- |
-| Accepted logs                   | 1,126,000             |
-| Accepted throughput             | 14,993.56 logs/s      |
-| Batch size / requested rate     | 1,000 / 15,000 logs/s |
-| Rejected logs                   | 0                     |
-| HTTP request failure rate       | 0%                    |
+| Accepted ingestion logs         | 1,801,800             |
+| Accepted throughput             | 15,006.29 logs/s      |
+| Batch size / requested rate     | 33 / 15,015 logs/s    |
+| Rejected logs / HTTP failures   | 0 / 0%                |
 | Dropped iterations              | 0                     |
-| Successful aggregation requests | 75 (1/s)              |
-| Ingestion latency p95           | 215.94 ms             |
-| Aggregation latency p95         | 357.36 ms             |
+| Successful aggregation requests | 120 (1/s)             |
+| Visible durable markers         | 120/120               |
+| Ingestion latency p95           | 1.32 s                |
+| Aggregation latency p95         | 501.05 ms             |
+| Visibility latency p95          | 281.64 ms             |
+| Final raw / rollup count        | 2,802,920 / 2,802,920 |
+| Requested checkpoints           | 0                     |
+| Full WAL buffers                | 0                     |
 
-This run demonstrates the target workload while the table grows through roughly one million rows; it is not evidence of a full two-minute run beginning with an already seeded one-million-row dataset. Saved two-minute seeded attempts did not meet all thresholds, so they are retained as diagnostic evidence rather than presented as passes. CPU and memory utilization were observed against enforced Compose limits but were not exported into the k6 summaries; no precise utilization percentages are claimed.
+Measured bottlenecks included PostgreSQL checkpoint pressure, WAL-buffer pressure, and severe write amplification from broad indexes. The current design uses `unnest` inserts, daily partition pruning, keyset pagination, a service-aligned index, a narrow request-ID index, 64 MB of WAL buffers, and the Compose-configured 4 GB `max_wal_size`. The trigram extension remains available, but the write-expensive message GIN index is not created; `q` currently relies on partition-pruned `ILIKE` scans.
 
-Measured bottlenecks included PostgreSQL checkpoint pressure during sustained writes and severe write amplification from broad indexes. The current design uses `unnest` inserts, daily partition pruning, keyset pagination, a service-aligned index, a narrow request-ID index, 16 MB of WAL buffers, and the Compose-configured 4 GB `max_wal_size`. The trigram extension remains available, but the write-expensive message GIN index is not created; `q` currently relies on partition-pruned `ILIKE` scans.
+Before the run, `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` measured 9.62 ms for request-ID visibility, 0.62 ms for first-page pagination, 1.07 ms for keyset pagination, 0.92 ms for service pagination, and 267.59 ms for an arbitrary-boundary 30-day aggregate. These are PostgreSQL execution times on the local disposable seed, not guarantees for other hardware.
 
 See the [load-test guide](load/README.md) for prerequisites, commands, scenario controls, stored summaries, and operational checks. The JSON summaries do not capture `docker stats`; record resource utilization separately when reproducing a benchmark.
 
@@ -302,7 +307,6 @@ See the [load-test guide](load/README.md) for prerequisites, commands, scenario 
 - The deployment is a single application container and a single PostgreSQL instance, with no replication or horizontal sharding.
 - Retention works at UTC-day granularity, so effective retention can exceed the configured duration by less than one day.
 - Authentication, tenancy, rate limiting, compression, metrics export, and dashboards are not implemented.
-- The saved passing mixed-workload result is approximately 75 seconds from an empty database. A passing two-minute run starting from one million rows has not been captured.
 
 ## Repository layout
 

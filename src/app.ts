@@ -2,7 +2,6 @@ import express from 'express';
 import { mountRoutes } from './routes/index.js';
 import { errorMiddleware } from './middleware/error-handler.js';
 import { notFoundMiddleware } from './middleware/not-found.js';
-// import { middlewareLogResponses } from './middleware/middlewareLogResponses.js';
 
 /**
  * Builds the Express app without listening. Routers are mounted by
@@ -13,8 +12,6 @@ import { notFoundMiddleware } from './middleware/not-found.js';
  */
 export function buildApp(): express.Express {
   const app = express();
-
-  // app.use(middlewareLogResponses);
 
   // Batches of up to ~1000 entries must fit; Express's default is 1MB.
   app.use(express.json({ limit: '10mb' }));

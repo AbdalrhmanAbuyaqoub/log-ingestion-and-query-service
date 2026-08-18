@@ -3,7 +3,6 @@ import { loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
 import { close as closeDb, initializeIngestPool } from './db/index.js';
 import { buildApp } from './app.js';
-import { runPartitionMaintenance } from './retention/partition-manager.js';
 import { startPartitionScheduler } from './retention/scheduler.js';
 import { stopIngestionCoordinator } from './ingestion/coordinator.js';
 
@@ -12,7 +11,6 @@ async function main(): Promise<void> {
 
   await runMigrations(config);
   await initializeIngestPool();
-  await runPartitionMaintenance(config.RETENTION_DAYS, new Date(), 2, true);
 
   const app = buildApp();
   const partitionScheduler = startPartitionScheduler(config.RETENTION_DAYS);

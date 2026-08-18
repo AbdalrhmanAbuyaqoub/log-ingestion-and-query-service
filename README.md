@@ -222,7 +222,7 @@ Validation is hand-written to collect per-entry failures and minimize work on th
 
 The waiting queue is capped at 50,000 entries. A request that would exceed the cap is rejected in full with HTTP 503 and `Retry-After: 1`; buffered data is never acknowledged early. A dedicated one-connection writer pool prevents read traffic from delaying serialized inserts, while nine connections serve health, query, aggregation, and maintenance work. Shutdown stops admission and drains queued writes before closing both pools.
 
-Before inserting retained late-arriving timestamps, the service ensures their daily partitions exist. Input outside the retained window can safely enter the default partition and is removed during maintenance.
+Before inserting retained late-arriving timestamps, the service lazily ensures their daily partitions exist (cache-backed, deduplicated across concurrent flushes). Out-of-retention timestamps enter the default partition and remain queryable but do not age out by DROP (see Known limitations).
 
 ### Schema and indexes
 
@@ -239,7 +239,7 @@ Before inserting retained late-arriving timestamps, the service ensures their da
 
 The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The narrower `(service, timestamp DESC)` index accelerates service-filtered pagination; PostgreSQL incrementally sorts the typically tiny equal-timestamp groups by ID, avoiding an extra ID key on every inserted row. A narrow `((attributes ->> 'request_id'))` index accelerates the load generator's selective equality probe while minimizing write amplification; both indexes propagate to existing and future partitions. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
 
-An atomic one-minute rollup keyed by timestamp, service, and level accelerates aggregates that do not use attribute or message filters. Arbitrary range boundaries remain exact by subtracting raw rows outside the requested half-open range from the boundary-minute rollups. Attribute- and message-filtered aggregates continue to use canonical logs. Rollup partitions follow the same daily creation and `DROP` retention lifecycle as raw-log partitions.
+An atomic one-minute rollup keyed by timestamp, service, and level accelerates aggregates that do not use attribute or message filters. Arbitrary range boundaries remain exact by subtracting raw rows outside the requested half-open range from the boundary-minute rollups. Attribute- and message-filtered aggregates continue to use canonical logs. Rollup partitions follow the same lazy-creation and `DROP` retention lifecycle as raw-log partitions.
 
 All user values are SQL parameters. The only dynamic aggregation expressions and partition identifiers come from fixed allowlists or strictly validated internal names.
 
@@ -249,9 +249,9 @@ Canonical attributes remain typed `jsonb`, preserving numbers and booleans in st
 
 ### Partitioning and retention
 
-Startup creates today's partition and two days ahead. An hourly scheduler repeats maintenance; a PostgreSQL advisory lock prevents concurrent maintainers. Complete UTC-day partitions are dropped only when their entire interval is outside `RETENTION_DAYS`, avoiding row-by-row `DELETE`, dead tuples, table bloat, and long-running cleanup.
+An hourly scheduler drops expired partitions; dated partitions are created lazily on the first insert of that day (cache-backed, deduplicated across concurrent flushes). A PostgreSQL advisory lock prevents concurrent maintainers. Complete UTC-day partitions are dropped only when their entire interval is outside `RETENTION_DAYS`, avoiding row-by-row `DELETE`, dead tuples, table bloat, and long-running cleanup.
 
-The default safety partition is rotated when it contains rows. Still-retained rows are moved into newly created dated partitions and expired rows disappear when the detached table is dropped. Because deletion is day-granular, the default 30-day policy retains data for approximately 30–31 days.
+`logs_default` remains as a permanent safety net for out-of-window timestamps; rows there stay queryable but do not age out by DROP. Because deletion is day-granular, the default 30-day policy retains data for approximately 30–31 days.
 
 ## Configuration and operations
 
@@ -306,6 +306,7 @@ See the [load-test guide](load/README.md) for prerequisites, commands, scenario 
 - Attribute- and message-filtered aggregation computes counts from raw logs and can be expensive over broad ranges.
 - The deployment is a single application container and a single PostgreSQL instance, with no replication or horizontal sharding.
 - Retention works at UTC-day granularity, so effective retention can exceed the configured duration by less than one day.
+- Out-of-retention timestamps that enter `logs_default` are not migrated to dated partitions and do not age out by DROP; they remain queryable until manually removed.
 - Authentication, tenancy, rate limiting, compression, metrics export, and dashboards are not implemented.
 
 ## Repository layout

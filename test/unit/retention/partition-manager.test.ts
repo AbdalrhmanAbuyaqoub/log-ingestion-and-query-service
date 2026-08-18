@@ -7,7 +7,7 @@ import {
   ensurePartitionsForTimestamps,
   isDayRetained,
   partitionName,
-  runPartitionMaintenance,
+  dropExpiredPartitions,
   utcDayStart,
 } from '../../../src/retention/partition-manager.js';
 import { getClient } from '../../../src/db/index.js';
@@ -94,11 +94,9 @@ describe('partition operations', () => {
     const release = vi.fn();
     vi.mocked(getClient).mockResolvedValue({ query, release } as never);
 
-    await expect(runPartitionMaintenance(30)).resolves.toEqual({
+    await expect(dropExpiredPartitions(30)).resolves.toEqual({
       skipped: true,
-      created: 0,
       dropped: 0,
-      reconciled: 0,
     });
     expect(release).toHaveBeenCalledOnce();
   });

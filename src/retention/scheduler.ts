@@ -1,4 +1,4 @@
-import { runPartitionMaintenance } from './partition-manager.js';
+import { dropExpiredPartitions } from './partition-manager.js';
 
 const HOUR_MS = 60 * 60_000;
 
@@ -16,7 +16,7 @@ export function startPartitionScheduler(retentionDays: number): PartitionSchedul
   };
 
   const run = (): void => {
-    active = runPartitionMaintenance(retentionDays)
+    active = dropExpiredPartitions(retentionDays)
       .then((result) => console.log('partition maintenance completed', result))
       .catch((error: unknown) => console.error('partition maintenance failed', error))
       .finally(schedule);

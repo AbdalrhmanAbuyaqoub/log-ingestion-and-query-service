@@ -3,7 +3,6 @@ import { getClient } from '../db/index.js';
 
 const DAY_MS = 86_400_000;
 const PARTITION_RE = /^logs_p(\d{4})_(\d{2})_(\d{2})$/;
-const ROLLUP_PARTITION_RE = /^log_rollups_1m_p(\d{4})_(\d{2})_(\d{2})$/;
 const ADVISORY_LOCK_KEY = 1_813_047_329;
 const knownPartitions = new Set<string>();
 const partitionChecks = new Map<string, Promise<number>>();
@@ -37,7 +36,7 @@ function utcDayStartMs(value: Date): number {
 }
 
 function quoteIdentifier(identifier: string): string {
-  if (!PARTITION_RE.test(identifier) && !ROLLUP_PARTITION_RE.test(identifier)) {
+  if (!PARTITION_RE.test(identifier)) {
     throw new Error(`unsafe partition identifier: ${identifier}`);
   }
   return `"${identifier}"`;
@@ -47,26 +46,11 @@ function bound(day: Date): string {
   return utcDayStart(day).toISOString();
 }
 
-function rollupPartitionName(day: Date): string {
-  return partitionName(day).replace(/^logs_p/, 'log_rollups_1m_p');
-}
-
-async function ensureRollupPartition(client: Queryable, day: Date): Promise<void> {
-  const start = utcDayStart(day);
-  const end = new Date(start.getTime() + DAY_MS);
-  const name = rollupPartitionName(start);
-  await client.query(
-    `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} PARTITION OF log_rollups_1m
-       FOR VALUES FROM ('${bound(start)}') TO ('${bound(end)}')`,
-  );
-}
-
 async function createPartition(client: Queryable, day: Date): Promise<boolean> {
   const start = utcDayStart(day);
   const end = new Date(start.getTime() + DAY_MS);
   const name = partitionName(start);
   if (await partitionExists(client, day)) {
-    await ensureRollupPartition(client, day);
     knownPartitions.add(name);
     return false;
   }
@@ -75,7 +59,6 @@ async function createPartition(client: Queryable, day: Date): Promise<boolean> {
     `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} PARTITION OF logs
        FOR VALUES FROM ('${bound(start)}') TO ('${bound(end)}')`,
   );
-  await ensureRollupPartition(client, day);
   knownPartitions.add(name);
   return true;
 }
@@ -130,7 +113,6 @@ async function ensurePartitionUncached(day: Date): Promise<number> {
   let locked = false;
   try {
     if (await partitionExists(client, day)) {
-      await ensureRollupPartition(client, day);
       knownPartitions.add(partitionName(day));
       return 0;
     }
@@ -157,24 +139,12 @@ async function listDatedRawPartitions(client: Queryable): Promise<string[]> {
   return result.rows.map((row) => row.name);
 }
 
-async function listDatedRollupPartitions(client: Queryable): Promise<string[]> {
-  const result = await client.query<{ name: string }>(`
-    SELECT child.relname AS name
-    FROM pg_inherits i
-    JOIN pg_class child ON child.oid = i.inhrelid
-    WHERE i.inhparent = 'log_rollups_1m'::regclass
-      AND child.relname ~ '^log_rollups_1m_p[0-9]{4}_[0-9]{2}_[0-9]{2}$'
-  `);
-  return result.rows.map((row) => row.name);
-}
-
 function dayFromPartitionName(name: string): Date | undefined {
-  const match = PARTITION_RE.exec(name) ?? ROLLUP_PARTITION_RE.exec(name);
+  const match = PARTITION_RE.exec(name);
   if (!match) return undefined;
   const day = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00.000Z`);
   if (Number.isNaN(day.getTime())) return undefined;
-  const canonical = partitionName(day);
-  return name === canonical || name === rollupPartitionName(day) ? day : undefined;
+  return name === partitionName(day) ? day : undefined;
 }
 
 export async function dropExpiredPartitions(
@@ -199,18 +169,14 @@ export async function dropExpiredPartitions(
     }
 
     const rawByDay = partitionsByDay(await listDatedRawPartitions(client));
-    const rollupByDay = partitionsByDay(await listDatedRollupPartitions(client));
-    const partitionDays = new Set([...rawByDay.keys(), ...rollupByDay.keys()]);
-    for (const dayTimestamp of partitionDays) {
+    for (const dayTimestamp of rawByDay.keys()) {
       const day = new Date(dayTimestamp);
       if (isDayRetained(day, now, retentionDays)) continue;
 
       await client.query('BEGIN');
       try {
         const raw = rawByDay.get(dayTimestamp);
-        const rollup = rollupByDay.get(dayTimestamp);
         if (raw) await client.query(`DROP TABLE ${quoteIdentifier(raw)}`);
-        if (rollup) await client.query(`DROP TABLE ${quoteIdentifier(rollup)}`);
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK');
@@ -219,6 +185,10 @@ export async function dropExpiredPartitions(
       knownPartitions.delete(partitionName(day));
       result.dropped++;
     }
+
+    const cutoff = utcDayStart(new Date(now.getTime() - retentionDays * DAY_MS));
+    await client.query('DELETE FROM log_rollups_1m WHERE bucket_start < $1', [cutoff]);
+
     return result;
   } finally {
     try {

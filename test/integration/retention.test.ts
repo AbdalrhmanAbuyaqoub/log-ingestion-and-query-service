@@ -48,6 +48,11 @@ describe('partition management and retention', () => {
       'utf8',
     );
     await verificationPool.query(narrowServiceIndexMigration);
+    const flattenRollupsMigration = await readFile(
+      new URL('../../migrations/007_flatten_rollups.sql', import.meta.url),
+      'utf8',
+    );
+    await verificationPool.query(flattenRollupsMigration);
 
     ({ dropExpiredPartitions } = await import('../../src/retention/partition-manager.js'));
     ({ close: closeServicePool } = await import('../../src/db/index.js'));
@@ -59,29 +64,34 @@ describe('partition management and retention', () => {
     await container?.stop();
   });
 
-  it('drops expired raw and rollup partitions while retaining valid ones', async () => {
+  it('drops expired raw partitions and deletes expired rollups while retaining valid ones', async () => {
     const now = new Date('2026-08-12T15:00:00Z');
     await verificationPool.query(`
       CREATE TABLE logs_p2026_06_01 PARTITION OF logs
       FOR VALUES FROM ('2026-06-01T00:00:00.000Z') TO ('2026-06-02T00:00:00.000Z');
-      CREATE TABLE log_rollups_1m_p2026_06_01 PARTITION OF log_rollups_1m
-      FOR VALUES FROM ('2026-06-01T00:00:00.000Z') TO ('2026-06-02T00:00:00.000Z');
-      CREATE TABLE log_rollups_1m_p2026_05_01 PARTITION OF log_rollups_1m
-      FOR VALUES FROM ('2026-05-01T00:00:00.000Z') TO ('2026-05-02T00:00:00.000Z');
+
+      INSERT INTO log_rollups_1m (bucket_start, service, level, count)
+      VALUES ('2026-06-01T00:00:00Z', 'svc', 'info', 5),
+             ('2026-05-01T00:00:00Z', 'svc', 'info', 3),
+             ('2026-08-01T00:00:00Z', 'svc', 'info', 7);
     `);
 
-    await expect(dropExpiredPartitions(30, now, true)).resolves.toMatchObject({ dropped: 2 });
+    await expect(dropExpiredPartitions(30, now, true)).resolves.toMatchObject({ dropped: 1 });
 
     const expired = await verificationPool.query(`
-      SELECT 1
-      FROM pg_class
-      WHERE relname IN (
-        'logs_p2026_06_01',
-        'log_rollups_1m_p2026_06_01',
-        'log_rollups_1m_p2026_05_01'
-      )
+      SELECT 1 FROM pg_class WHERE relname = 'logs_p2026_06_01'
     `);
     expect(expired.rowCount).toBe(0);
+
+    const retainedRollups = await verificationPool.query<{ count: string }>(`
+      SELECT count(*)::text AS count FROM log_rollups_1m
+    `);
+    expect(retainedRollups.rows[0]?.count).toBe('1');
+
+    const retainedRow = await verificationPool.query<{ bucket_start: Date }>(
+      `SELECT bucket_start FROM log_rollups_1m ORDER BY bucket_start`,
+    );
+    expect(retainedRow.rows[0]?.bucket_start.toISOString()).toBe('2026-08-01T00:00:00.000Z');
   });
 
   it('skips when the advisory lock is already held', async () => {
@@ -110,14 +120,10 @@ describe('partition management and retention', () => {
       SELECT child.relname AS name
       FROM pg_inherits i
       JOIN pg_class child ON child.oid = i.inhrelid
-      WHERE i.inhparent IN ('logs'::regclass, 'log_rollups_1m'::regclass)
-        AND child.relname IN ('logs_p2026_08_12', 'log_rollups_1m_p2026_08_12')
-      ORDER BY child.relname
+      WHERE i.inhparent = 'logs'::regclass
+        AND child.relname = 'logs_p2026_08_12'
     `);
-    expect(children.rows.map((row) => row.name)).toEqual([
-      'log_rollups_1m_p2026_08_12',
-      'logs_p2026_08_12',
-    ]);
+    expect(children.rows.map((row) => row.name)).toEqual(['logs_p2026_08_12']);
 
     const requestIdIndexes = await verificationPool.query<{ name: string; definition: string }>(`
       SELECT indexname AS name, indexdef AS definition

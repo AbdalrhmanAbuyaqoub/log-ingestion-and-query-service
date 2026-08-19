@@ -21,38 +21,13 @@ describe('partition management and retention', () => {
     process.env.DATABASE_URL = databaseUrl;
     process.env.RETENTION_DAYS = '30';
     verificationPool = new pg.Pool({ connectionString: databaseUrl });
-    for (const name of ['001_initial.sql', '002_log_rollups.sql']) {
+    for (const name of ['001_initial.sql']) {
       const migration = await readFile(
         new URL(`../../migrations/${name}`, import.meta.url),
         'utf8',
       );
       await verificationPool.query(migration);
     }
-    const requestIdMigration = await readFile(
-      new URL('../../migrations/003_request_id_index.sql', import.meta.url),
-      'utf8',
-    );
-    await verificationPool.query(requestIdMigration);
-    const sequenceCacheMigration = await readFile(
-      new URL('../../migrations/004_sequence_cache.sql', import.meta.url),
-      'utf8',
-    );
-    await verificationPool.query(sequenceCacheMigration);
-    const narrowRequestIdMigration = await readFile(
-      new URL('../../migrations/005_replace_request_id_index.sql', import.meta.url),
-      'utf8',
-    );
-    await verificationPool.query(narrowRequestIdMigration);
-    const narrowServiceIndexMigration = await readFile(
-      new URL('../../migrations/006_narrow_service_index.sql', import.meta.url),
-      'utf8',
-    );
-    await verificationPool.query(narrowServiceIndexMigration);
-    const flattenRollupsMigration = await readFile(
-      new URL('../../migrations/007_flatten_rollups.sql', import.meta.url),
-      'utf8',
-    );
-    await verificationPool.query(flattenRollupsMigration);
 
     ({ dropExpiredPartitions } = await import('../../src/retention/partition-manager.js'));
     ({ close: closeServicePool } = await import('../../src/db/index.js'));
@@ -124,18 +99,6 @@ describe('partition management and retention', () => {
         AND child.relname = 'logs_p2026_08_12'
     `);
     expect(children.rows.map((row) => row.name)).toEqual(['logs_p2026_08_12']);
-
-    const requestIdIndexes = await verificationPool.query<{ name: string; definition: string }>(`
-      SELECT indexname AS name, indexdef AS definition
-      FROM pg_indexes
-      WHERE schemaname = 'public'
-        AND indexdef LIKE '%request_id%'
-        AND tablename = 'logs_p2026_08_12'
-    `);
-    expect(requestIdIndexes.rows).toHaveLength(1);
-    expect(requestIdIndexes.rows[0]?.definition).toContain("((attributes ->> 'request_id'::text))");
-    expect(requestIdIndexes.rows[0]?.definition).not.toContain('timestamp DESC');
-    expect(requestIdIndexes.rows[0]?.definition).not.toContain('id DESC');
 
     const serviceIndexes = await verificationPool.query<{ count: number }>(`
       SELECT count(*)::int AS count

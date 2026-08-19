@@ -83,6 +83,7 @@ describe('IngestionCoordinator', () => {
     });
 
     const first = coordinator.enqueue([entry(1), entry(2), entry(3)]);
+    await new Promise((resolve) => setImmediate(resolve));
     const second = coordinator.enqueue([entry(4), entry(5)]);
     const third = coordinator.enqueue([entry(6), entry(7)]);
     const fourth = coordinator.enqueue([entry(8), entry(9), entry(10)]);
@@ -120,6 +121,7 @@ describe('IngestionCoordinator', () => {
 
     const first = coordinator.enqueue([entry(1)]);
     const second = coordinator.enqueue([entry(2)]);
+    await new Promise((resolve) => setImmediate(resolve));
     const later = coordinator.enqueue([entry(3), entry(4)]);
     const firstRejected = expect(first).rejects.toBe(failure);
     const secondRejected = expect(second).rejects.toBe(failure);
@@ -163,6 +165,7 @@ describe('IngestionCoordinator', () => {
       insert,
     });
     const first = coordinator.enqueue([entry(1), entry(2), entry(3)]);
+    await new Promise((resolve) => setImmediate(resolve));
     const second = coordinator.enqueue([entry(4), entry(5)]);
     const third = coordinator.enqueue([entry(6), entry(7)]);
     const fourth = coordinator.enqueue([entry(8), entry(9)]);
@@ -196,6 +199,7 @@ describe('IngestionCoordinator', () => {
     });
 
     const active = coordinator.enqueue([entry(1), entry(2)]);
+    await new Promise((resolve) => setImmediate(resolve));
     const firstQueued = coordinator.enqueue([entry(3), entry(4), entry(5)]);
     const secondQueued = coordinator.enqueue([entry(6), entry(7), entry(8)]);
     const thirdQueued = coordinator.enqueue([entry(9), entry(10), entry(11)]);

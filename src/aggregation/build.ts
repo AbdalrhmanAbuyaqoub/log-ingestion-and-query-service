@@ -61,6 +61,58 @@ export function canUseRollups(aggregate: AggregateQuery): boolean {
 export function buildRollupAggregateQuery(aggregate: AggregateQuery): BuiltQuery {
   const rollupStart = new Date(Math.floor(aggregate.since.getTime() / MINUTE_MS) * MINUTE_MS);
   const rollupEnd = new Date(Math.ceil(aggregate.until.getTime() / MINUTE_MS) * MINUTE_MS);
+  const aligned =
+    rollupStart.getTime() === aggregate.since.getTime() &&
+    rollupEnd.getTime() === aggregate.until.getTime();
+  return aligned
+    ? buildAlignedRollupQuery(aggregate, rollupStart, rollupEnd)
+    : buildBoundaryRollupQuery(aggregate, rollupStart, rollupEnd);
+}
+
+function buildAlignedRollupQuery(
+  aggregate: AggregateQuery,
+  rollupStart: Date,
+  rollupEnd: Date,
+): BuiltQuery {
+  const params: unknown[] = [rollupStart, rollupEnd];
+  const filters: string[] = [];
+
+  if (aggregate.service !== undefined) {
+    params.push(aggregate.service);
+    filters.push(`r.service = $${params.length}`);
+  }
+  if (aggregate.level !== undefined) {
+    params.push(aggregate.level);
+    filters.push(`r.level = $${params.length}`);
+  }
+
+  params.push(BUCKET_INTERVALS[aggregate.bucket]);
+  const intervalPlaceholder = `$${params.length}`;
+  const groupExpression = getGroupExpression(aggregate.groupBy);
+  const where =
+    filters.length > 0
+      ? `WHERE r.bucket_start >= $1\n  AND r.bucket_start < $2\n  AND ${filters.join('\n  AND ')}`
+      : 'WHERE r.bucket_start >= $1\n  AND r.bucket_start < $2';
+
+  const text = `
+SELECT
+  date_bin(${intervalPlaceholder}::interval, r.bucket_start, '1970-01-01T00:00:00Z'::timestamptz) AS start,
+  ${groupExpression} AS "group",
+  SUM(r.count) AS count
+FROM log_rollups_1m r
+${where}
+GROUP BY 1${aggregate.groupBy ? ', 2' : ''}
+ORDER BY start ASC, "group" ASC
+`.trim();
+
+  return { text, params };
+}
+
+function buildBoundaryRollupQuery(
+  aggregate: AggregateQuery,
+  rollupStart: Date,
+  rollupEnd: Date,
+): BuiltQuery {
   const params: unknown[] = [aggregate.since, aggregate.until, rollupStart, rollupEnd];
   const rawFilters: string[] = [];
   const rollupFilters: string[] = [];

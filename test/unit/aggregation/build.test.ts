@@ -89,7 +89,32 @@ describe('buildAggregateQuery', () => {
 });
 
 describe('buildRollupAggregateQuery', () => {
-  it('uses rollups for supported filters and raw logs only at partial minute boundaries', () => {
+  it('uses a simple rollup-only scan for minute-aligned ranges', () => {
+    const aligned = buildRollupAggregateQuery(
+      aggregate({
+        since: new Date('2026-08-10T10:00:00Z'),
+        until: new Date('2026-08-10T11:00:00Z'),
+        service: 'checkout',
+        level: 'error',
+        groupBy: 'service',
+      }),
+    );
+
+    expect(aligned.text).toContain('FROM log_rollups_1m r');
+    expect(aligned.text).not.toContain('UNION ALL');
+    expect(aligned.text).not.toContain('-1::bigint');
+    expect(aligned.text).not.toContain('HAVING');
+    expect(aligned.text).not.toContain('logs l');
+    expect(aligned.params).toEqual([
+      new Date('2026-08-10T10:00:00Z'),
+      new Date('2026-08-10T11:00:00Z'),
+      'checkout',
+      'error',
+      '1 minute',
+    ]);
+  });
+
+  it('uses rollups for supported filters and raw logs only at partial minute boundaries (non-aligned)', () => {
     const input = aggregate({ service: 'checkout', level: 'error', groupBy: 'service' });
     expect(canUseRollups(input)).toBe(true);
 
@@ -125,7 +150,7 @@ describe('buildRollupAggregateQuery', () => {
         until: new Date('2026-08-10T11:00:00Z'),
       }),
     );
-    expect(aligned.params.slice(2, 4)).toEqual([
+    expect(aligned.params.slice(0, 2)).toEqual([
       new Date('2026-08-10T10:00:00Z'),
       new Date('2026-08-10T11:00:00Z'),
     ]);

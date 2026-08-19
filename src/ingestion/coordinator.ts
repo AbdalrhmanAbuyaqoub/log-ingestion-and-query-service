@@ -26,12 +26,13 @@ export class IngestionCoordinator {
   private readonly bufferMax: number;
   private readonly insert: (entries: ValidLogEntry[]) => Promise<number>;
   private readonly now: () => number;
+
   private queue: PendingRequest[] = [];
-  private activeRequests: PendingRequest[] = [];
+  private inFlight: PendingRequest[] = [];
   private waitingEntries = 0;
-  private timer: NodeJS.Timeout | undefined;
-  private active: Promise<void> | undefined;
   private stopping = false;
+  private wake: (() => void) | undefined;
+  private readonly loopDone: Promise<void>;
 
   constructor(options: IngestionCoordinatorOptions) {
     this.flushIntervalMs = options.flushIntervalMs;
@@ -40,6 +41,7 @@ export class IngestionCoordinator {
     this.bufferMax = options.bufferMax;
     this.insert = options.insert ?? insertLogs;
     this.now = options.now ?? Date.now;
+    this.loopDone = this.run();
   }
 
   enqueue(entries: ValidLogEntry[]): Promise<number> {
@@ -49,84 +51,89 @@ export class IngestionCoordinator {
     if (entries.length > this.bufferMax || this.waitingEntries + entries.length > this.bufferMax) {
       return Promise.reject(new IngestionUnavailableError('ingestion buffer full'));
     }
-
     return new Promise<number>((resolve, reject) => {
       this.queue.push({ entries, enqueuedAt: this.now(), resolve, reject });
       this.waitingEntries += entries.length;
-      if (this.waitingEntries >= this.flushBatchSize) {
-        this.clearTimer();
-        void this.flush();
-      } else {
-        this.scheduleTimer();
-      }
+      this.notify();
     });
   }
 
   async stop(timeoutMs = 5_000): Promise<void> {
     this.stopping = true;
-    this.clearTimer();
-    const drain = this.drain();
-    let timeout: NodeJS.Timeout | undefined;
+    this.notify();
+    let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
-        drain,
+        this.loopDone,
         new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error('ingestion drain timed out')), timeoutMs);
+          timer = setTimeout(() => reject(new Error('ingestion drain timed out')), timeoutMs);
         }),
       ]);
     } catch (error) {
       this.rejectOutstanding(error);
       throw error;
     } finally {
-      if (timeout) clearTimeout(timeout);
+      if (timer) clearTimeout(timer);
     }
   }
 
-  private async drain(): Promise<void> {
-    while (this.active || this.queue.length > 0) {
-      if (this.active) await this.active;
-      else await this.flush(true);
+  // Single loop drives every flush. Nothing else ever calls insert(),
+  // so there's no reentrancy guard to maintain by hand.
+  private async run(): Promise<void> {
+    while (!this.stopping || this.queue.length > 0) {
+      if (this.queue.length === 0) {
+        await this.sleep();
+        continue;
+      }
+      if (!this.stopping && this.waitingEntries < this.flushBatchSize) {
+        const oldest = this.queue[0]!;
+        const delay = oldest.enqueuedAt + this.flushIntervalMs - this.now();
+        if (delay > 0) {
+          await this.sleep(delay);
+          continue;
+        }
+      }
+      await this.flushOnce();
     }
   }
 
-  private flush(force = false): Promise<void> {
-    if (this.active) return this.active;
-    if (this.queue.length === 0) return Promise.resolve();
-    if (!force && this.waitingEntries < this.flushBatchSize) {
-      this.scheduleTimer();
-      return Promise.resolve();
-    }
+  private sleep(ms?: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      this.wake = () => {
+        if (timer) clearTimeout(timer);
+        resolve();
+      };
+      if (ms !== undefined) {
+        timer = setTimeout(() => {
+          this.wake = undefined;
+          resolve();
+        }, ms);
+      }
+    });
+  }
 
-    this.clearTimer();
+  private notify(): void {
+    const wake = this.wake;
+    this.wake = undefined;
+    wake?.();
+  }
+
+  private async flushOnce(): Promise<void> {
     const requests = this.takeNextFlush();
-    this.activeRequests = requests;
-    let entryCount = 0;
-    for (const request of requests) entryCount += request.entries.length;
-    const entries = new Array<ValidLogEntry>(entryCount);
-    let entryIndex = 0;
-    for (const request of requests) {
-      for (const entry of request.entries) entries[entryIndex++] = entry;
+    this.inFlight = requests;
+    const entries = requests.flatMap((request) => request.entries);
+    try {
+      const accepted = await this.insert(entries);
+      if (accepted !== entries.length) {
+        throw new Error(`database accepted ${accepted} of ${entries.length} queued logs`);
+      }
+      for (const request of requests) request.resolve(request.entries.length);
+    } catch (error) {
+      for (const request of requests) request.reject(error);
+    } finally {
+      this.inFlight = [];
     }
-
-    this.active = this.insert(entries)
-      .then((accepted) => {
-        if (accepted !== entries.length) {
-          throw new Error(`database accepted ${accepted} of ${entries.length} queued logs`);
-        }
-        for (const request of requests) request.resolve(request.entries.length);
-      })
-      .catch((error: unknown) => {
-        for (const request of requests) request.reject(error);
-      })
-      .finally(() => {
-        this.activeRequests = [];
-        this.active = undefined;
-        if (this.queue.length > 0) {
-          if (this.stopping || this.waitingEntries >= this.flushBatchSize) void this.flush(true);
-          else this.scheduleTimer();
-        }
-      });
-    return this.active;
   }
 
   private takeNextFlush(): PendingRequest[] {
@@ -141,26 +148,10 @@ export class IngestionCoordinator {
     return requests;
   }
 
-  private scheduleTimer(): void {
-    if (this.timer || this.queue.length === 0 || this.active) return;
-    const oldest = this.queue[0]!;
-    const delay = Math.max(0, oldest.enqueuedAt + this.flushIntervalMs - this.now());
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      void this.flush(true);
-    }, delay);
-  }
-
-  private clearTimer(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
-  }
-
   private rejectOutstanding(error: unknown): void {
-    this.clearTimer();
-    for (const request of [...this.queue, ...this.activeRequests]) request.reject(error);
+    for (const request of [...this.queue, ...this.inFlight]) request.reject(error);
     this.queue = [];
-    this.activeRequests = [];
+    this.inFlight = [];
     this.waitingEntries = 0;
   }
 }

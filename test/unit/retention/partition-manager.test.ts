@@ -7,7 +7,7 @@ import {
   ensurePartitionsForTimestamps,
   isDayRetained,
   partitionName,
-  runPartitionMaintenance,
+  dropExpiredPartitions,
   utcDayStart,
 } from '../../../src/retention/partition-manager.js';
 import { getClient } from '../../../src/db/index.js';
@@ -57,9 +57,8 @@ describe('partition operations', () => {
       ),
     ).resolves.toBe(0);
 
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenCalledTimes(1);
     expect(String(query.mock.calls[0]?.[0])).not.toContain('pg_advisory_lock');
-    expect(String(query.mock.calls[1]?.[0])).toContain('log_rollups_1m');
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -85,7 +84,7 @@ describe('partition operations', () => {
     await expect(Promise.all([first, second])).resolves.toEqual([0, 0]);
     await expect(ensurePartitionsForTimestamps([timestamp], 30, now)).resolves.toBe(0);
     expect(getClient).toHaveBeenCalledOnce();
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -94,11 +93,9 @@ describe('partition operations', () => {
     const release = vi.fn();
     vi.mocked(getClient).mockResolvedValue({ query, release } as never);
 
-    await expect(runPartitionMaintenance(30)).resolves.toEqual({
+    await expect(dropExpiredPartitions(30)).resolves.toEqual({
       skipped: true,
-      created: 0,
       dropped: 0,
-      reconciled: 0,
     });
     expect(release).toHaveBeenCalledOnce();
   });

@@ -11,3 +11,4 @@ docs/
 test/integration/database.test.ts
 /scripts/
 /benchmark
+security_best_practices_report.md

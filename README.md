@@ -222,7 +222,7 @@ Validation is hand-written to collect per-entry failures and minimize work on th
 
 The waiting queue is capped at 50,000 entries. A request that would exceed the cap is rejected in full with HTTP 503 and `Retry-After: 1`; buffered data is never acknowledged early. A dedicated one-connection writer pool prevents read traffic from delaying serialized inserts, while nine connections serve health, query, aggregation, and maintenance work. Shutdown stops admission and drains queued writes before closing both pools.
 
-Before inserting retained late-arriving timestamps, the service lazily ensures their daily partitions exist (cache-backed, deduplicated across concurrent flushes). Out-of-retention timestamps enter the default partition and remain queryable but do not age out by DROP (see Known limitations).
+Before inserting retained late-arriving timestamps, the service lazily ensures their daily partitions exist (cache-backed, deduplicated across concurrent flushes). Out-of-retention timestamps enter the default partition, remain queryable until the next hourly retention run, and are then removed by rotating and dropping that partition.
 
 ### Schema and indexes
 
@@ -237,7 +237,7 @@ Before inserting retained late-arriving timestamps, the service lazily ensures t
 | `message`    | `text`          | Original log message                         |
 | `attributes` | `jsonb`         | Typed flat scalar map, default `{}`          |
 
-The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The narrower `(service, timestamp DESC)` index accelerates service-filtered pagination; PostgreSQL incrementally sorts the typically tiny equal-timestamp groups by ID, avoiding an extra ID key on every inserted row. A narrow `((attributes ->> 'request_id'))` index accelerates the load generator's selective equality probe while minimizing write amplification; both indexes propagate to existing and future partitions. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
+The primary key is `(timestamp, id)`, as PostgreSQL requires a partitioned unique key to include the partition key. It also supplies deterministic newest-first keyset pagination without an offset scan. The narrower `(service, timestamp DESC)` index accelerates service-filtered pagination; PostgreSQL incrementally sorts the typically tiny equal-timestamp groups by ID, avoiding an extra ID key on every inserted row. A `logs_default` partition prevents insertion failure when a dated partition is unexpectedly absent.
 
 An atomic one-minute rollup keyed by timestamp, service, and level accelerates aggregates that do not use attribute or message filters. Arbitrary range boundaries remain exact by subtracting raw rows outside the requested half-open range from the boundary-minute rollups; minute-aligned ranges use a simpler rollup-only scan without the boundary UNION. Attribute- and message-filtered aggregates continue to use canonical logs. Rollups are stored in a flat `log_rollups_1m` table; retention is a simple `DELETE` (negligible bloat at the summary scale). Raw-log partitions remain DROP-based.
 
@@ -245,13 +245,13 @@ All user values are SQL parameters. The only dynamic aggregation expressions and
 
 ### Attribute storage
 
-Canonical attributes remain typed `jsonb`, preserving numbers and booleans in storage and responses. Filters deliberately use `attributes ->> key = value`, matching the contract's string-comparison semantics. Only `request_id` has a targeted expression index because the official visibility lookup uses that highly selective value. There is no broad JSONB index; other attribute-heavy scans remain a known trade-off under the one-CPU database budget.
+Canonical attributes remain typed `jsonb`, preserving numbers and booleans in storage and responses. Filters deliberately use `attributes ->> key = value`, matching the contract's string-comparison semantics. Attribute keys are user-defined, so no attribute-specific expression index—including one for `request_id`—is maintained. Attribute-heavy scans remain a known trade-off under the one-CPU database budget.
 
 ### Partitioning and retention
 
-An hourly scheduler drops expired partitions; dated partitions are created lazily on the first insert of that day (cache-backed, deduplicated across concurrent flushes). A PostgreSQL advisory lock prevents concurrent maintainers. Complete UTC-day partitions are dropped only when their entire interval is outside `RETENTION_DAYS`, avoiding row-by-row `DELETE`, dead tuples, table bloat, and long-running cleanup.
+Partitioning and `RETENTION_DAYS` use the log's supplied event timestamp, not its ingestion time. A recently ingested historical event may therefore already be expired. An hourly scheduler drops expired partitions; dated partitions are created lazily on the first insert of that event-time day (cache-backed, deduplicated across concurrent flushes). A PostgreSQL advisory lock prevents concurrent maintainers. Complete UTC-day partitions are dropped only when their entire interval is outside `RETENTION_DAYS`, avoiding row-by-row `DELETE`, dead tuples, table bloat, and long-running cleanup.
 
-`logs_default` remains as a permanent safety net for out-of-window timestamps; rows there stay queryable but do not age out by DROP. Because deletion is day-granular, the default 30-day policy retains data for approximately 30–31 days.
+`logs_default` is a safety net for out-of-window timestamps. When it contains only expired rows, maintenance replaces it with a fresh default and drops the old partition in the same transaction that removes expired rollups. If a retained row is detected there, maintenance makes no changes and logs `RETENTION_DEFAULT_CONTAINS_RETAINED_LOGS` with timestamps and the cutoff for investigation. Inspect alerts with `docker compose logs app`. Because deletion is day-granular, the default 30-day policy retains data for approximately 30–31 days.
 
 ## Configuration and operations
 
@@ -293,7 +293,7 @@ On 2026-08-15, a clean repeated run used the enforced Compose limits and an exac
 | Requested checkpoints           | 0                     |
 | Full WAL buffers                | 0                     |
 
-Measured bottlenecks included PostgreSQL checkpoint pressure, WAL-buffer pressure, and severe write amplification from broad indexes. The current design uses `unnest` inserts, daily partition pruning, keyset pagination, a service-aligned index, a narrow request-ID index, 64 MB of WAL buffers, and the Compose-configured 4 GB `max_wal_size`. The trigram extension remains available, but the write-expensive message GIN index is not created; `q` currently relies on partition-pruned `ILIKE` scans.
+Measured bottlenecks included PostgreSQL checkpoint pressure, WAL-buffer pressure, and severe write amplification from broad indexes. The current design uses `unnest` inserts, daily partition pruning, keyset pagination, a service-aligned index, 64 MB of WAL buffers, and the Compose-configured 4 GB `max_wal_size`. The trigram extension remains available, but the write-expensive message GIN index is not created; `q` currently relies on partition-pruned `ILIKE` scans.
 
 Before the run, `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` measured 9.62 ms for request-ID visibility, 0.62 ms for first-page pagination, 1.07 ms for keyset pagination, 0.92 ms for service pagination, and 267.59 ms for an arbitrary-boundary 30-day aggregate. These are PostgreSQL execution times on the local disposable seed, not guarantees for other hardware.
 
@@ -301,12 +301,12 @@ See the [load-test guide](load/README.md) for prerequisites, commands, scenario 
 
 ## Known limitations and trade-offs
 
-- Attribute filters other than `request_id` are not indexed and can scan all rows in the selected time partitions.
+- Attribute filters are not indexed and can scan all rows in the selected time partitions.
 - Message substring search uses `ILIKE` without a trigram index to protect ingestion throughput; broad or unbounded searches can be expensive.
 - Attribute- and message-filtered aggregation computes counts from raw logs and can be expensive over broad ranges.
 - The deployment is a single application container and a single PostgreSQL instance, with no replication or horizontal sharding.
 - Retention works at UTC-day granularity, so effective retention can exceed the configured duration by less than one day.
-- Out-of-retention timestamps that enter `logs_default` are not migrated to dated partitions and do not age out by DROP; they remain queryable until manually removed.
+- A retained row in `logs_default` aborts retention maintenance until the partition-routing invariant is investigated and corrected.
 - Authentication, tenancy, rate limiting, compression, metrics export, and dashboards are not implemented.
 
 ## Repository layout

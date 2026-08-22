@@ -14,6 +14,31 @@ export type DropResult = {
   dropped: number;
 };
 
+type DefaultPartitionStats = {
+  total_count: string;
+  retained_count: string;
+  earliest_retained: Date | null;
+  latest_retained: Date | null;
+};
+
+export class RetentionInvariantError extends Error {
+  readonly code = 'RETENTION_DEFAULT_CONTAINS_RETAINED_LOGS';
+
+  constructor(
+    readonly retainedRows: string,
+    readonly earliestRetained: Date | null,
+    readonly latestRetained: Date | null,
+    readonly cutoff: Date,
+  ) {
+    super(
+      `${retainedRows} retained log(s) found in logs_default; ` +
+        `maintenance aborted at cutoff ${cutoff.toISOString()}. ` +
+        'Investigate why retained timestamps were routed to logs_default.',
+    );
+    this.name = 'RetentionInvariantError';
+  }
+}
+
 export function utcDayStart(value: Date): Date {
   return new Date(utcDayStartMs(value));
 }
@@ -168,26 +193,58 @@ export async function dropExpiredPartitions(
       if (!locked) return { ...result, skipped: true };
     }
 
-    const rawByDay = partitionsByDay(await listDatedRawPartitions(client));
-    for (const dayTimestamp of rawByDay.keys()) {
-      const day = new Date(dayTimestamp);
-      if (isDayRetained(day, now, retentionDays)) continue;
+    const cutoff = utcDayStart(new Date(now.getTime() - retentionDays * DAY_MS));
+    const droppedDays: Date[] = [];
+    await client.query('BEGIN');
+    try {
+      // Lock the parent first so inserts cannot route into the default between
+      // the safety check and its replacement, and DDL follows PostgreSQL's
+      // parent-before-child lock order.
+      await client.query('LOCK TABLE logs IN ACCESS EXCLUSIVE MODE');
+      const defaultStats = await client.query<DefaultPartitionStats>(
+        `SELECT
+           count(*)::text AS total_count,
+           count(*) FILTER (WHERE "timestamp" >= $1)::text AS retained_count,
+           min("timestamp") FILTER (WHERE "timestamp" >= $1) AS earliest_retained,
+           max("timestamp") FILTER (WHERE "timestamp" >= $1) AS latest_retained
+         FROM logs_default`,
+        [cutoff],
+      );
+      const stats = defaultStats.rows[0];
+      if (stats && stats.retained_count !== '0') {
+        throw new RetentionInvariantError(
+          stats.retained_count,
+          stats.earliest_retained,
+          stats.latest_retained,
+          cutoff,
+        );
+      }
 
-      await client.query('BEGIN');
-      try {
+      const rawByDay = partitionsByDay(await listDatedRawPartitions(client));
+      for (const dayTimestamp of rawByDay.keys()) {
+        const day = new Date(dayTimestamp);
+        if (isDayRetained(day, now, retentionDays)) continue;
         const raw = rawByDay.get(dayTimestamp);
         if (raw) await client.query(`DROP TABLE ${quoteIdentifier(raw)}`);
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
+        droppedDays.push(day);
+        result.dropped++;
       }
-      knownPartitions.delete(partitionName(day));
-      result.dropped++;
+
+      if (stats?.total_count !== '0') {
+        await client.query('ALTER TABLE logs DETACH PARTITION logs_default');
+        await client.query('ALTER TABLE logs_default RENAME TO logs_default_expired');
+        await client.query('CREATE TABLE logs_default PARTITION OF logs DEFAULT');
+        await client.query('DROP TABLE logs_default_expired');
+      }
+
+      await client.query('DELETE FROM log_rollups_1m WHERE bucket_start < $1', [cutoff]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
     }
 
-    const cutoff = utcDayStart(new Date(now.getTime() - retentionDays * DAY_MS));
-    await client.query('DELETE FROM log_rollups_1m WHERE bucket_start < $1', [cutoff]);
+    for (const day of droppedDays) knownPartitions.delete(partitionName(day));
 
     return result;
   } finally {

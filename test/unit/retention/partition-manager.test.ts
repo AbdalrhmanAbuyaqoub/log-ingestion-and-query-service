@@ -4,6 +4,7 @@ vi.mock('../../../src/db/index.js', () => ({
   getClient: vi.fn(),
 }));
 import {
+  RetentionInvariantError,
   ensurePartitionsForTimestamps,
   isDayRetained,
   partitionName,
@@ -97,6 +98,47 @@ describe('partition operations', () => {
       skipped: true,
       dropped: 0,
     });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('rolls back all maintenance when the default contains a retained log', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ locked: true }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            total_count: '2',
+            retained_count: '1',
+            earliest_retained: new Date('2026-08-10T10:00:00Z'),
+            latest_retained: new Date('2026-08-10T10:00:00Z'),
+          },
+        ],
+      })
+      .mockResolvedValue({ rows: [] });
+    const release = vi.fn();
+    vi.mocked(getClient).mockResolvedValue({ query, release } as never);
+
+    const error = await dropExpiredPartitions(30, new Date('2026-08-12T15:00:00Z')).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(RetentionInvariantError);
+    expect(error).toMatchObject({
+      code: 'RETENTION_DEFAULT_CONTAINS_RETAINED_LOGS',
+      retainedRows: '1',
+      cutoff: new Date('2026-07-13T00:00:00Z'),
+    });
+    expect(query.mock.calls.map(([text]) => String(text))).toEqual([
+      expect.stringContaining('pg_try_advisory_lock'),
+      'BEGIN',
+      'LOCK TABLE logs IN ACCESS EXCLUSIVE MODE',
+      expect.stringContaining('FROM logs_default'),
+      'ROLLBACK',
+      expect.stringContaining('pg_advisory_unlock'),
+    ]);
     expect(release).toHaveBeenCalledOnce();
   });
 });
